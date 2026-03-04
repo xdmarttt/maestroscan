@@ -383,8 +383,7 @@ async def scan(req: ScanRequest):
         # ── Normalise warped image histogram ──────────────────────────────────────
         # Stretch the tonal range so white paper → 255 and darkest ink → near 0.
         # This makes thresholds consistent regardless of printer tone or lighting.
-        lo = int(np.percentile(warped, 2))
-        hi = int(np.percentile(warped, 98))
+        lo, hi = (int(v) for v in np.percentile(warped, [2, 98]))
         if hi > lo:
             warped = np.clip(
                 (warped.astype(np.float32) - lo) / (hi - lo) * 255, 0, 255
