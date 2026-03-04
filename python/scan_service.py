@@ -34,8 +34,7 @@ REG_NORM = {
 GRID_ROWS, GRID_COLS = 5, 4
 LETTERS = ["A", "B", "C", "D"]
 SAMPLE_RADIUS = 22         # px in warped space (bubble interior radius ≈ 27px)
-FILL_THRESHOLD = 128       # absolute brightness upper bound for a filled bubble
-MIN_FILL_GAP = 22          # filled bubble must be ≥ this darker than 2nd darkest
+MIN_FILL_GAP = 15          # filled bubble must be ≥ this darker than 2nd darkest in row
 
 # ── FastAPI setup ──────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -63,20 +62,19 @@ def decode_gray(image_base64: str) -> np.ndarray:
     return np.array(pil_img.convert("L"), dtype=np.uint8)
 
 
-def sample_circle(gray: np.ndarray, cx: float, cy: float, r: int) -> float:
-    """Average brightness of pixels within radius r of (cx, cy)."""
-    H, W = gray.shape
+def count_dark_pixels(binary: np.ndarray, cx: float, cy: float, r: int) -> int:
+    """Count non-zero (dark after BINARY_INV) pixels within radius r of (cx, cy)."""
+    H, W = binary.shape
     icx, icy = int(round(cx)), int(round(cy))
     y0, y1 = max(0, icy - r), min(H, icy + r + 1)
     x0, x1 = max(0, icx - r), min(W, icx + r + 1)
     if y1 <= y0 or x1 <= x0:
-        return 255.0
-    patch = gray[y0:y1, x0:x1].astype(np.float32)
+        return 0
+    patch = binary[y0:y1, x0:x1]
     ys = np.arange(y0 - icy, y1 - icy).reshape(-1, 1)
     xs = np.arange(x0 - icx, x1 - icx).reshape(1, -1)
     mask = (xs * xs + ys * ys) <= r * r
-    vals = patch[mask]
-    return float(vals.mean()) if vals.size > 0 else 255.0
+    return int(patch[mask].sum() // 255)
 
 
 # ── Registration mark detection ────────────────────────────────────────────────
@@ -222,6 +220,46 @@ def find_four_marks_strict(
 
 # ── Detect endpoint ────────────────────────────────────────────────────────────
 
+@app.post("/api/debug-scan")
+async def debug_scan(req: DetectRequest):
+    """Returns the warped image as base64 PNG so you can see what the server sees."""
+    try:
+        gray = decode_gray(req.imageBase64)
+        corners = find_four_marks_strict(gray)
+        if corners is None:
+            return {"found": False, "warpedImage": None}
+
+        tl, tr, bl, br = corners
+        src_pts = np.float32([tl, tr, bl, br])
+        dst_pts = np.float32([
+            [REG_NORM["TL"][0] * WARP_W, REG_NORM["TL"][1] * WARP_H],
+            [REG_NORM["TR"][0] * WARP_W, REG_NORM["TR"][1] * WARP_H],
+            [REG_NORM["BL"][0] * WARP_W, REG_NORM["BL"][1] * WARP_H],
+            [REG_NORM["BR"][0] * WARP_W, REG_NORM["BR"][1] * WARP_H],
+        ])
+        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+        warped = cv2.warpPerspective(gray, M, (WARP_W, WARP_H))
+
+        # Draw bubble target circles for visual verification
+        vis = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLS):
+                cx = int((0.25 + col * 0.15) * WARP_W)
+                cy = int((0.22 + row * 0.13) * WARP_H)
+                cv2.circle(vis, (cx, cy), SAMPLE_RADIUS, (0, 0, 255), 2)
+                cv2.putText(vis, LETTERS[col], (cx - 8, cy + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+        # Scale down for transfer (800×1125 is large)
+        small = cv2.resize(vis, (320, 450))
+        _, buf = cv2.imencode(".png", small)
+        img_b64 = base64.b64encode(buf).decode()
+        return {"found": True, "warpedImage": img_b64}
+    except Exception:
+        traceback.print_exc()
+        return {"found": False, "warpedImage": None}
+
+
 @app.post("/api/detect")
 async def detect(req: DetectRequest):
     """Returns {found: true} only when a valid sheet pattern is confirmed."""
@@ -262,39 +300,54 @@ async def scan(req: ScanRequest):
         M = cv2.getPerspectiveTransform(src_pts, dst_pts)
         warped = cv2.warpPerspective(gray, M, (WARP_W, WARP_H))
 
-        # Enhance local contrast before sampling
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        warped = clahe.apply(warped)
+        # Otsu threshold → binary image (dark pixels become white/255, bright → 0).
+        # Otsu automatically finds the best global threshold for this specific image,
+        # so it works regardless of exposure, screen vs paper, or lighting conditions.
+        _, binary = cv2.threshold(warped, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        # Sample each bubble
-        bubble_brightness: list[list[float]] = []
+        # Count dark pixels per bubble.  A filled bubble → hundreds of dark pixels.
+        # An empty bubble → almost none (just the thin border line).
+        BUBBLE_AREA = int(np.pi * SAMPLE_RADIUS ** 2)   # ≈ 1520 px for r=22
+        bubble_counts: list[list[int]] = []
         answers: list[str] = []
         confidence: list[float] = []
 
         for row in range(GRID_ROWS):
-            row_b: list[float] = []
+            row_c: list[int] = []
             for col in range(GRID_COLS):
                 nx = 0.25 + col * 0.15
                 ny = 0.22 + row * 0.13
-                row_b.append(sample_circle(warped, nx * WARP_W, ny * WARP_H, SAMPLE_RADIUS))
-            bubble_brightness.append(row_b)
+                row_c.append(count_dark_pixels(binary, nx * WARP_W, ny * WARP_H, SAMPLE_RADIUS))
+            bubble_counts.append(row_c)
 
-            sorted_b = sorted(row_b)
-            min_b, second_min = sorted_b[0], (sorted_b[1] if len(sorted_b) > 1 else 255.0)
-            min_idx = row_b.index(min_b)
+            sorted_c = sorted(row_c, reverse=True)
+            max_c   = sorted_c[0]
+            second_c = sorted_c[1] if len(sorted_c) > 1 else 0
+            max_idx = row_c.index(max_c)
 
-            gap = second_min - min_b
-            if min_b < FILL_THRESHOLD and gap >= MIN_FILL_GAP:
-                answers.append(LETTERS[min_idx])
-                confidence.append(min(gap / 80.0, 1.0))
+            fill_ratio = max_c / BUBBLE_AREA          # fraction of bubble area that's dark
+            gap_ratio  = (max_c - second_c) / (BUBBLE_AREA + 1)
+
+            # A real fill: >20% of bubble area dark AND clearly more than runner-up
+            if fill_ratio > 0.20 and gap_ratio > 0.10:
+                answers.append(LETTERS[max_idx])
+                confidence.append(min(gap_ratio * 5, 1.0))
             else:
                 answers.append("?")
                 confidence.append(0.0)
 
+        # Diagnostic: dark-pixel count at mark positions — should be high (marks are solid black)
+        mark_counts = {
+            k: count_dark_pixels(binary, REG_NORM[k][0] * WARP_W, REG_NORM[k][1] * WARP_H, 15)
+            for k in REG_NORM
+        }
         print(f"[scan] corners: {[f'({c[0]:.0f},{c[1]:.0f})' for c in corners]}")
-        print("[scan] brightness: " + "  ".join(
-            f"Q{i+1}: {[round(v) for v in row]}" for i, row in enumerate(bubble_brightness)
+        print(f"[scan] mark dark-px in warped (high = transform OK): {mark_counts}")
+        print("[scan] bubble dark-px counts: " + "  ".join(
+            f"Q{i+1}:{row_c}" for i, row_c in enumerate(bubble_counts)
         ))
+
+        bubble_brightness = [[c / BUBBLE_AREA for c in row] for row in bubble_counts]  # keep API compat
 
         return {
             "answers": answers,
