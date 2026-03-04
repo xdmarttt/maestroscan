@@ -236,44 +236,51 @@ export default function ScannerScreen() {
     try {
       if (!cameraRef.current) throw new Error("Camera not ready");
 
-      // 1. Capture photo
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.9,
-        base64: false,
-        skipProcessing: false,
-      });
+      // Take 3 shots and majority-vote the answers.
+      // This eliminates one-off errors from camera shake, momentary blur, or
+      // bad auto-exposure on a single frame — same idea as burst mode scanning.
+      const SHOTS = 3;
+      const allAnswers: string[][] = [];
 
-      // 2. Resize to 800px wide for fast upload
-      const resized = await ImageManipulator.manipulateAsync(
-        photo.uri,
-        [{ resize: { width: 800 } }],
-        {
-          compress: 0.85,
-          format: ImageManipulator.SaveFormat.JPEG,
-          base64: true,
-        }
-      );
+      for (let shot = 0; shot < SHOTS; shot++) {
+        // Small gap lets the camera re-expose between shots
+        if (shot > 0) await new Promise((r) => setTimeout(r, 300));
 
-      if (!resized.base64) throw new Error("Failed to encode image");
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.9,
+          base64: false,
+          skipProcessing: false,
+        });
 
-      // 3. Send to server for processing
-      const response = await fetch(`${getApiBase()}/api/scan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          imageBase64: resized.base64,
-          questions,
-        }),
-      });
+        const resized = await ImageManipulator.manipulateAsync(
+          photo.uri,
+          [{ resize: { width: 800 } }],
+          { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+        );
+        if (!resized.base64) continue;
 
-      if (!response.ok) {
-        const err = await response.text();
-        throw new Error(`Server error ${response.status}: ${err}`);
+        const resp = await fetch(`${getApiBase()}/api/scan`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: resized.base64, questions }),
+        });
+        if (!resp.ok) continue;
+        const d = await resp.json();
+        if (d.error || !d.answers) continue;
+        allAnswers.push(d.answers as string[]);
       }
 
-      const data = await response.json();
+      if (allAnswers.length === 0) throw new Error("Sheet not detected — make sure all 4 corner marks are visible");
 
-      if (data.error) throw new Error(data.error);
+      // Majority vote per question: pick the answer chosen by most shots.
+      // Ties (e.g. A,B,A) → first winner wins. "?" counts as a vote too.
+      const data = {
+        answers: Array.from({ length: questions.length }, (_, i) => {
+          const votes: Record<string, number> = {};
+          for (const row of allAnswers) votes[row[i] ?? "?"] = (votes[row[i] ?? "?"] ?? 0) + 1;
+          return Object.entries(votes).sort((a, b) => b[1] - a[1])[0][0];
+        }),
+      };
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setScanDone(true);
@@ -289,7 +296,7 @@ export default function ScannerScreen() {
     } catch (err: any) {
       console.error("Scan failed:", err);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setScanError(err?.message?.includes("not detected")
+      setScanError(err?.message?.includes("corner marks")
         ? "Sheet not detected — make sure all 4 corner marks are visible."
         : "Scan failed — make sure the server is running and sheet is visible.");
     } finally {

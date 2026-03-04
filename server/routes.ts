@@ -41,6 +41,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Debug: returns warped image with bubble circles drawn — useful for verifying alignment
+  app.post("/api/debug-scan", async (req, res) => {
+    try {
+      const { imageBase64 } = req.body;
+      if (!imageBase64 || typeof imageBase64 !== "string") {
+        return res.status(400).json({ found: false });
+      }
+      const result = await proxyToPython("/api/debug-scan", { imageBase64 });
+      res.json(result);
+    } catch (err) {
+      console.error("/api/debug-scan error:", err);
+      res.json({ found: false });
+    }
+  });
+
   app.post("/api/scan", async (req, res) => {
     try {
       const body = ScanRequestSchema.parse(req.body);

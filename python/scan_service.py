@@ -62,19 +62,77 @@ def decode_gray(image_base64: str) -> np.ndarray:
     return np.array(pil_img.convert("L"), dtype=np.uint8)
 
 
-def count_dark_pixels(binary: np.ndarray, cx: float, cy: float, r: int) -> int:
-    """Count non-zero (dark after BINARY_INV) pixels within radius r of (cx, cy)."""
-    H, W = binary.shape
-    icx, icy = int(round(cx)), int(round(cy))
-    y0, y1 = max(0, icy - r), min(H, icy + r + 1)
-    x0, x1 = max(0, icx - r), min(W, icx + r + 1)
+def _ring_mean(gray: np.ndarray, icx: int, icy: int,
+               r_inner: float, r_outer: float) -> float:
+    """Mean brightness of pixels in the annulus between r_inner and r_outer."""
+    H, W = gray.shape
+    ri, ro = int(r_inner), int(r_outer)
+    y0, y1 = max(0, icy - ro), min(H, icy + ro + 1)
+    x0, x1 = max(0, icx - ro), min(W, icx + ro + 1)
     if y1 <= y0 or x1 <= x0:
-        return 0
-    patch = binary[y0:y1, x0:x1]
+        return 200.0
+    patch = gray[y0:y1, x0:x1].astype(np.float32)
     ys = np.arange(y0 - icy, y1 - icy).reshape(-1, 1)
     xs = np.arange(x0 - icx, x1 - icx).reshape(1, -1)
-    mask = (xs * xs + ys * ys) <= r * r
-    return int(patch[mask].sum() // 255)
+    dsq = xs * xs + ys * ys
+    mask = (dsq >= r_inner * r_inner) & (dsq <= r_outer * r_outer)
+    vals = patch[mask]
+    return float(vals.mean()) if vals.size > 0 else 200.0
+
+
+def _ring_bright(gray: np.ndarray, icx: int, icy: int,
+                 r_inner: float, r_outer: float, pct: float = 80.0) -> float:
+    """
+    Mean of the BRIGHTEST pct% of pixels in the annulus.
+
+    Using the bright percentile rather than the raw mean makes the outer
+    reference more robust: shadows, row labels, or any dark element that
+    happens to fall in the outer ring are excluded, so the reference always
+    reflects the true white-paper brightness around the bubble.
+    """
+    H, W = gray.shape
+    ro = int(r_outer)
+    y0, y1 = max(0, icy - ro), min(H, icy + ro + 1)
+    x0, x1 = max(0, icx - ro), min(W, icx + ro + 1)
+    if y1 <= y0 or x1 <= x0:
+        return 200.0
+    patch = gray[y0:y1, x0:x1].astype(np.float32)
+    ys = np.arange(y0 - icy, y1 - icy).reshape(-1, 1)
+    xs = np.arange(x0 - icx, x1 - icx).reshape(1, -1)
+    dsq = xs * xs + ys * ys
+    mask = (dsq >= r_inner * r_inner) & (dsq <= r_outer * r_outer)
+    vals = patch[mask]
+    if vals.size == 0:
+        return 200.0
+    cutoff = np.percentile(vals, 100.0 - pct)
+    bright = vals[vals >= cutoff]
+    return float(bright.mean()) if bright.size > 0 else float(vals.mean())
+
+
+def fill_signal(gray: np.ndarray, cx: float, cy: float) -> float:
+    """
+    Self-normalising fill score for a single bubble.
+
+    Compares the brightness INSIDE the bubble to the white paper just OUTSIDE it.
+    The score is outer_brightness - inner_brightness:
+      ~0        → empty bubble (interior ≈ white paper)
+      large (+) → filled bubble (interior is dark, paper outside is bright)
+
+    No global threshold is needed — works for screen, printed paper, pencil, pen,
+    any lighting level.
+
+    In warped space (800×1125), bubble radius ≈ 27px, border ≈ 4px:
+      inner samples radius 0–18 px  (safely inside the bubble interior)
+      outer samples radius 32–44 px (white paper outside the bubble)
+      Column spacing = 120 px → outer rings never overlap adjacent bubbles ✓
+    """
+    INNER_R  = 18   # inside the bubble
+    OUTER_R1 = 32   # inner edge of paper annulus (just past bubble border)
+    OUTER_R2 = 44   # outer edge of paper annulus
+    icx, icy = int(round(cx)), int(round(cy))
+    inner = _ring_mean(gray, icx, icy, 0, INNER_R)
+    outer = _ring_mean(gray, icx, icy, OUTER_R1, OUTER_R2)
+    return outer - inner   # 0 = empty, high = filled
 
 
 # ── Registration mark detection ────────────────────────────────────────────────
@@ -166,9 +224,10 @@ def find_four_marks_strict(
             print(f"[strict] no candidate in quadrant "
                   f"x={nx0:.2f}-{nx1:.2f} y={ny0:.2f}-{ny1:.2f}")
             return None
-        # Among candidates in this quadrant, pick the one closest to the
-        # image corner — registration marks sit at the corners of the sheet.
-        best = min(in_q, key=lambda c: (c[0] - icx) ** 2 + (c[1] - icy) ** 2)
+        # Pick the DARKEST candidate — registration marks are solid black.
+        # "Closest to corner" risks picking shadows, thumbs, or debris at the
+        # image edge instead of the actual mark.
+        best = min(in_q, key=lambda c: _ring_mean(gray, int(c[0]), int(c[1]), 0, 8))
         corners.append((best[0], best[1]))
 
     tl, tr, bl, br = corners
@@ -300,56 +359,108 @@ async def scan(req: ScanRequest):
         M = cv2.getPerspectiveTransform(src_pts, dst_pts)
         warped = cv2.warpPerspective(gray, M, (WARP_W, WARP_H))
 
-        # Otsu threshold → binary image (dark pixels become white/255, bright → 0).
-        # Otsu automatically finds the best global threshold for this specific image,
-        # so it works regardless of exposure, screen vs paper, or lighting conditions.
-        _, binary = cv2.threshold(warped, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # ── Post-warp sanity: verify the 4 mark positions are actually dark ────────
+        # If the perspective transform used the wrong contours, the expected mark
+        # locations in warped space will be bright (paper) instead of dark (ink).
+        # Bubble radius in warped space ≈ 27.5px; mark is 20px → 50px in warp.
+        # Sample a 12px-radius circle at each expected mark center.
+        mark_w = [
+            (int(REG_NORM["TL"][0] * WARP_W), int(REG_NORM["TL"][1] * WARP_H)),
+            (int(REG_NORM["TR"][0] * WARP_W), int(REG_NORM["TR"][1] * WARP_H)),
+            (int(REG_NORM["BL"][0] * WARP_W), int(REG_NORM["BL"][1] * WARP_H)),
+            (int(REG_NORM["BR"][0] * WARP_W), int(REG_NORM["BR"][1] * WARP_H)),
+        ]
+        mark_b = [_ring_mean(warped, mx, my, 0, 12) for mx, my in mark_w]
+        # Adaptive threshold: marks must be darker than 65% of interior paper brightness.
+        # Using an absolute value (130) rejects valid scans with light-ink printing.
+        interior_median = float(np.median(warped[200:900, 150:650]))
+        mark_threshold = min(0.65 * interior_median, 160.0)
+        print(f"[scan] warp mark brightness (should be dark): {[f'{b:.0f}' for b in mark_b]}  "
+              f"interior={interior_median:.0f}  threshold={mark_threshold:.0f}")
+        if max(mark_b) > mark_threshold:
+            return {"error": "Sheet not aligned correctly — make sure all 4 corner marks are visible and flat"}
 
-        # Count dark pixels per bubble.  A filled bubble → hundreds of dark pixels.
-        # An empty bubble → almost none (just the thin border line).
-        BUBBLE_AREA = int(np.pi * SAMPLE_RADIUS ** 2)   # ≈ 1520 px for r=22
-        bubble_counts: list[list[int]] = []
+        # ── Normalise warped image histogram ──────────────────────────────────────
+        # Stretch the tonal range so white paper → 255 and darkest ink → near 0.
+        # This makes thresholds consistent regardless of printer tone or lighting.
+        lo = int(np.percentile(warped, 2))
+        hi = int(np.percentile(warped, 98))
+        if hi > lo:
+            warped = np.clip(
+                (warped.astype(np.float32) - lo) / (hi - lo) * 255, 0, 255
+            ).astype(np.uint8)
+
+        # ── Bubble reading ─────────────────────────────────────────────────────────
+        # Normalised fill ratio: (outer_brightness - inner_brightness) / outer_brightness
+        #
+        #   ratio ≈ 0.00–0.06  → empty  (inner ≈ outer ≈ white paper)
+        #   ratio ≈ 0.10–0.90  → filled (dark pencil/ink inside, bright paper outside)
+        #
+        # outer uses the BRIGHTEST 80% of the annulus ring so that any dark
+        # element (shadow, text, crease) that falls in the ring is excluded.
+        #
+        # Radii in warped space (bubble radius ≈ 27.5px, border ≈ 4px thick):
+        #   INNER_R  = 16   — well inside interior (safe margin from 23.75px inner edge)
+        #   OUTER_R1 = 36   — starts 8px past bubble edge (clears JPEG border bleed)
+        #   OUTER_R2 = 50   — more outer-ring pixels → percentile more stable
+        INNER_R  = 16
+        OUTER_R1 = 36
+        OUTER_R2 = 50
+
+        # ratio must exceed this to count as filled
+        MIN_RATIO = 0.08
+        # winner must beat runner-up by this margin (prevents noise wins)
+        MIN_GAP   = 0.04
+
+        row_ratios: list[list[float]] = []
+        row_inner: list[list[float]] = []
+        row_outer: list[list[float]] = []
         answers: list[str] = []
         confidence: list[float] = []
 
         for row in range(GRID_ROWS):
-            row_c: list[int] = []
+            ratios: list[float] = []
+            inners: list[float] = []
+            outers: list[float] = []
             for col in range(GRID_COLS):
                 nx = 0.25 + col * 0.15
                 ny = 0.22 + row * 0.13
-                row_c.append(count_dark_pixels(binary, nx * WARP_W, ny * WARP_H, SAMPLE_RADIUS))
-            bubble_counts.append(row_c)
+                cx, cy = nx * WARP_W, ny * WARP_H
+                icx, icy = int(round(cx)), int(round(cy))
+                inner = _ring_mean(warped, icx, icy, 0, INNER_R)
+                outer = _ring_bright(warped, icx, icy, OUTER_R1, OUTER_R2)
+                ratio = (outer - inner) / max(outer, 64.0)
+                ratios.append(ratio)
+                inners.append(inner)
+                outers.append(outer)
+            row_ratios.append(ratios)
+            row_inner.append(inners)
+            row_outer.append(outers)
 
-            sorted_c = sorted(row_c, reverse=True)
-            max_c   = sorted_c[0]
-            second_c = sorted_c[1] if len(sorted_c) > 1 else 0
-            max_idx = row_c.index(max_c)
+            sorted_r = sorted(ratios, reverse=True)
+            best   = sorted_r[0]
+            second = sorted_r[1] if len(sorted_r) > 1 else 0.0
+            best_idx = ratios.index(best)
+            gap = best - second
 
-            fill_ratio = max_c / BUBBLE_AREA          # fraction of bubble area that's dark
-            gap_ratio  = (max_c - second_c) / (BUBBLE_AREA + 1)
-
-            # A real fill: winner must have ≥5% of bubble area dark (handles light pencil /
-            # screen scans) AND clearly more dark pixels than the runner-up (≥5% gap).
-            if fill_ratio > 0.05 and gap_ratio > 0.05:
-                answers.append(LETTERS[max_idx])
-                confidence.append(min(gap_ratio * 5, 1.0))
+            if best >= MIN_RATIO and gap >= MIN_GAP:
+                answers.append(LETTERS[best_idx])
+                confidence.append(min(gap / 0.4, 1.0))
             else:
                 answers.append("?")
                 confidence.append(0.0)
 
-        # Diagnostic: dark-pixel count at mark positions — should be high (marks are solid black)
-        mark_counts = {
-            k: count_dark_pixels(binary, REG_NORM[k][0] * WARP_W, REG_NORM[k][1] * WARP_H, 15)
-            for k in REG_NORM
-        }
         print(f"[scan] corners: {[f'({c[0]:.0f},{c[1]:.0f})' for c in corners]}")
-        print(f"[scan] mark dark-px (high=good): {mark_counts}")
-        print("[scan] bubble fill%: " + "  ".join(
-            f"Q{i+1}:[" + ",".join(f"{c/BUBBLE_AREA:.0%}" for c in row_c) + f"]→{answers[i]}"
-            for i, row_c in enumerate(bubble_counts)
-        ))
+        for i, (ratios, inners, outers) in enumerate(
+            zip(row_ratios, row_inner, row_outer)
+        ):
+            inner_str = ",".join(f"{v:.0f}" for v in inners)
+            outer_str = ",".join(f"{v:.0f}" for v in outers)
+            rat_str   = ",".join(f"{v:.2f}" for v in ratios)
+            print(f"[scan] Q{i+1}: inner=[{inner_str}] outer=[{outer_str}] "
+                  f"ratio=[{rat_str}]→{answers[i]}")
 
-        bubble_brightness = [[c / BUBBLE_AREA for c in row] for row in bubble_counts]  # keep API compat
+        bubble_brightness = row_ratios  # higher ratio = more filled
 
         return {
             "answers": answers,
