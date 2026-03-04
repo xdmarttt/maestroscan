@@ -328,8 +328,9 @@ async def scan(req: ScanRequest):
             fill_ratio = max_c / BUBBLE_AREA          # fraction of bubble area that's dark
             gap_ratio  = (max_c - second_c) / (BUBBLE_AREA + 1)
 
-            # A real fill: >20% of bubble area dark AND clearly more than runner-up
-            if fill_ratio > 0.20 and gap_ratio > 0.10:
+            # A real fill: winner must have ≥5% of bubble area dark (handles light pencil /
+            # screen scans) AND clearly more dark pixels than the runner-up (≥5% gap).
+            if fill_ratio > 0.05 and gap_ratio > 0.05:
                 answers.append(LETTERS[max_idx])
                 confidence.append(min(gap_ratio * 5, 1.0))
             else:
@@ -342,9 +343,10 @@ async def scan(req: ScanRequest):
             for k in REG_NORM
         }
         print(f"[scan] corners: {[f'({c[0]:.0f},{c[1]:.0f})' for c in corners]}")
-        print(f"[scan] mark dark-px in warped (high = transform OK): {mark_counts}")
-        print("[scan] bubble dark-px counts: " + "  ".join(
-            f"Q{i+1}:{row_c}" for i, row_c in enumerate(bubble_counts)
+        print(f"[scan] mark dark-px (high=good): {mark_counts}")
+        print("[scan] bubble fill%: " + "  ".join(
+            f"Q{i+1}:[" + ",".join(f"{c/BUBBLE_AREA:.0%}" for c in row_c) + f"]→{answers[i]}"
+            for i, row_c in enumerate(bubble_counts)
         ))
 
         bubble_brightness = [[c / BUBBLE_AREA for c in row] for row in bubble_counts]  # keep API compat

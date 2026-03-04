@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Alert,
 } from "react-native";
 import { router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   useSharedValue,
@@ -109,6 +110,20 @@ export default function ScannerScreen() {
   const lastAutoScanRef = useRef(0);
   // Always points to the latest handleScan — fixes stale closure in the detect interval
   const handleScanRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
+  // Reset scan state every time this screen comes back into focus
+  // (after returning from results, the component stays mounted so refs aren't cleared)
+  useFocusEffect(
+    useCallback(() => {
+      isScanningRef.current = false;
+      detectCountRef.current = 0;
+      lastAutoScanRef.current = 0;   // clear cooldown so auto-scan works immediately
+      setIsScanning(false);
+      setScanDone(false);
+      setScanError(null);
+      setSheetDetected(false);
+    }, [])
+  );
 
   const scanLineY = useSharedValue(0);
   const frameGlow = useSharedValue(0);
