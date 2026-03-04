@@ -18,10 +18,13 @@ const SHEET_W = 320;
 const SHEET_H = 450;
 
 // Registration mark: 20×20 black square, 9.6px from each edge
-// Centers: TL(19.6,28)  TR(300.4,28)  BL(19.6,422)  BR(300.4,422)
+// Corners:  TL(19.6,28)   TR(300.4,28)   BL(19.6,422)   BR(300.4,422)
+// Centers:  CL(19.6,225)  CR(300.4,225)  ← center-side marks
 const MARK_SIZE = 20;
 const MARK_OFFSET_X = 9.6; // from left/right edge
-const MARK_OFFSET_Y = 18; // from top/bottom edge
+const MARK_OFFSET_Y = 18;  // from top/bottom edge
+// Center-side marks sit at the vertical midpoint of the sheet
+const CENTER_MARK_TOP = (SHEET_H - MARK_SIZE) / 2; // = 215 → center y = 225
 
 // Bubble grid (normalized → pixel)
 // col A(0) nx=0.25  B(1) nx=0.40  C(2) nx=0.55  D(3) nx=0.70
@@ -82,11 +85,13 @@ export default function SheetScreen() {
       >
         {/* ── Printable sheet ── */}
         <View style={styles.sheetContainer}>
-          {/* Registration marks */}
+          {/* Registration marks — 4 corners + 2 center-side (6 total) */}
           <View style={[styles.regMark, { left: MARK_OFFSET_X, top: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { right: MARK_OFFSET_X, top: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { left: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { right: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
+          <View style={[styles.regMark, { left: MARK_OFFSET_X, top: CENTER_MARK_TOP }]} />
+          <View style={[styles.regMark, { right: MARK_OFFSET_X, top: CENTER_MARK_TOP }]} />
 
           {/* Title */}
           <Text style={styles.sheetTitle}>GradeSnap</Text>

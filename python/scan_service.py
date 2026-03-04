@@ -6,8 +6,12 @@ Run: python3 -m uvicorn scan_service:app --reload --port 5002
 
 import base64
 import io
+import os
 import traceback
 from typing import Optional
+
+# Debug output path — overwritten on every scan so you always see the latest
+DEBUG_IMG_PATH = os.path.join(os.path.dirname(__file__), "debug_last_scan.png")
 
 import cv2
 import numpy as np
@@ -23,12 +27,15 @@ WARP_W, WARP_H = 800, 1125  # preserves 320:450 aspect ratio
 
 # Registration mark centers in NORMALIZED sheet coordinates.
 # Each mark is a 20×20 black square; centers (px on 320×450 sheet):
-#   TL=(19.6, 28)  TR=(300.4, 28)  BL=(19.6, 422)  BR=(300.4, 422)
+#   TL=(19.6, 28)   TR=(300.4, 28)   BL=(19.6, 422)  BR=(300.4, 422)
+#   CL=(19.6, 225)  CR=(300.4, 225)  ← center-side marks (added for 6-pt homography)
 REG_NORM = {
-    "TL": (19.6 / SHEET_W, 28.0 / SHEET_H),
-    "TR": (300.4 / SHEET_W, 28.0 / SHEET_H),
-    "BL": (19.6 / SHEET_W, 422.0 / SHEET_H),
+    "TL": (19.6 / SHEET_W,   28.0 / SHEET_H),
+    "TR": (300.4 / SHEET_W,  28.0 / SHEET_H),
+    "BL": (19.6 / SHEET_W,  422.0 / SHEET_H),
     "BR": (300.4 / SHEET_W, 422.0 / SHEET_H),
+    "CL": (19.6 / SHEET_W,  225.0 / SHEET_H),   # center-left
+    "CR": (300.4 / SHEET_W, 225.0 / SHEET_H),   # center-right
 }
 
 GRID_ROWS, GRID_COLS = 5, 4
@@ -50,6 +57,9 @@ class DetectRequest(BaseModel):
 class ScanRequest(BaseModel):
     imageBase64: str
     questions: list
+    # [[x,y],[x,y],[x,y],[x,y]] TL,TR,BL,BR in pixels of the resized image.
+    # When provided, perspective warp uses these corners directly — no mark detection.
+    corners: Optional[list] = None
 
 
 # ── Image helpers ──────────────────────────────────────────────────────────────
@@ -59,6 +69,12 @@ def decode_gray(image_base64: str) -> np.ndarray:
     buf = base64.b64decode(image_base64)
     pil_img = Image.open(io.BytesIO(buf))
     pil_img = ImageOps.exif_transpose(pil_img)
+    # expo-image-manipulator strips EXIF when resizing, leaving raw landscape pixels.
+    # The answer sheet is always portrait (taller than wide), so if we receive a
+    # landscape image it means EXIF rotation was lost — rotate back to portrait.
+    if pil_img.width > pil_img.height:
+        pil_img = pil_img.rotate(90, expand=True)  # 90° CCW — standard iOS sensor fix
+        print(f"[decode] landscape image auto-rotated to portrait ({pil_img.width}×{pil_img.height})")
     return np.array(pil_img.convert("L"), dtype=np.uint8)
 
 
@@ -137,45 +153,28 @@ def fill_signal(gray: np.ndarray, cx: float, cy: float) -> float:
 
 # ── Registration mark detection ────────────────────────────────────────────────
 
-def find_four_marks_strict(
+def _find_mark_candidates(
     gray: np.ndarray,
-) -> Optional[list[tuple[float, float]]]:
+) -> list[tuple[float, float, float]]:
     """
-    Find 4 registration marks using adaptive thresholding + contour detection.
-    Works like QR code scanning: adaptive threshold handles any lighting,
-    printed paper, or screen display without needing absolute brightness values.
-    Returns [TL, TR, BL, BR] or None.
+    Run adaptive threshold + contour filter to find all square-ish dark blobs.
+    Returns list of (cx, cy, area) tuples — registration mark candidates.
     """
     H, W = gray.shape
-
-    # ── Denoise (reduces JPEG artifacts) ──────────────────────────────────────
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    # ── Adaptive threshold ────────────────────────────────────────────────────
-    # Block size must be larger than the mark so the mark is judged relative
-    # to its surroundings (same principle as QR code decoders).
-    # Marks are ~6% of sheet width; block = ~3× that.
-    bsz = max(31, round(W * 0.18) | 1)   # must be odd
+    bsz = max(31, round(W * 0.18) | 1)
     thresh = cv2.adaptiveThreshold(
         blurred, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV,
         bsz, 10
     )
-
-    # ── Close gaps (JPEG compression / screen anti-aliasing) ─────────────────
-    # 5×5 kernel fills interior holes that JPEG leaves inside black marks.
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-
-    # ── Find + filter contours ─────────────────────────────────────────────────
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Marks are ≈6% of sheet width in the photo.
-    # Accept a wide range to handle distance variation (1% – 18% of image width).
     min_area = (W * 0.010) ** 2
     max_area = (W * 0.180) ** 2
-
-    cands: list[tuple[float, float, float]] = []   # (cx, cy, area)
+    cands: list[tuple[float, float, float]] = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
         if not (min_area <= area <= max_area):
@@ -183,39 +182,117 @@ def find_four_marks_strict(
         x, y, bw, bh = cv2.boundingRect(cnt)
         if bw < 2 or bh < 2:
             continue
-        # Must be roughly square (allow perspective distortion ~2:1 max)
-        squareness = min(bw, bh) / max(bw, bh)
-        if squareness < 0.45:
+        # Bounding-box aspect ratio: reject elongated shapes (keep near-square)
+        if min(bw, bh) / max(bw, bh) < 0.60:
             continue
-        # Must be mostly filled (solid square, not a circle outline)
-        solidity = area / (bw * bh)
-        if solidity < 0.40:
+        # Solidity: area / bounding-box area
+        #   Square (registration mark): ~1.0  → PASS
+        #   Circle (filled bubble):      π/4 ≈ 0.785 → FAIL
+        # This is the key filter that keeps squares and rejects circles.
+        if area / (bw * bh) < 0.82:
             continue
-        # Moments-based centroid is more accurate than bounding-box centre
         M_cnt = cv2.moments(cnt)
         if M_cnt["m00"] < 1:
             continue
         cx = M_cnt["m10"] / M_cnt["m00"]
         cy = M_cnt["m01"] / M_cnt["m00"]
         cands.append((cx, cy, area))
+    return cands
+
+
+def _find_center_marks(
+    gray: np.ndarray,
+    cands: list[tuple[float, float, float]],
+    tl: tuple[float, float],
+    tr: tuple[float, float],
+    bl: tuple[float, float],
+    br: tuple[float, float],
+) -> tuple[Optional[tuple[float, float]], Optional[tuple[float, float]]]:
+    """
+    Given the 4 corner positions, look for center-side marks (CL, CR).
+
+    Uses TIGHT x tolerance (±5% W) because center marks share the same
+    x-column as the corner marks — bubbles and other blobs on the sheet are
+    never this close to the left/right edge.  A loose x window would allow
+    filled bubbles (which also pass the squareness/solidity filter) to be
+    mistakenly accepted as center marks, corrupting the homography.
+
+    Also requires genuine darkness (mean brightness < 100) so an empty
+    circle border is never accepted.
+    """
+    H, W = gray.shape
+    x_tol = W * 0.05   # tight: marks are vertically aligned with corner marks
+    y_tol = W * 0.12   # loose: sheet can be at an angle
+    results: list[Optional[tuple[float, float]]] = []
+    for pred in [
+        ((tl[0] + bl[0]) / 2, (tl[1] + bl[1]) / 2),  # CL predicted
+        ((tr[0] + br[0]) / 2, (tr[1] + br[1]) / 2),  # CR predicted
+    ]:
+        nearby = [
+            (cx, cy) for cx, cy, _ in cands
+            if abs(cx - pred[0]) < x_tol and abs(cy - pred[1]) < y_tol
+        ]
+        if nearby:
+            best = min(nearby, key=lambda c: _ring_mean(gray, int(c[0]), int(c[1]), 0, 8))
+            darkness = _ring_mean(gray, int(best[0]), int(best[1]), 0, 8)
+            # Must be a genuinely dark solid mark — not just a circle outline
+            if darkness < 100:
+                results.append(best)
+            else:
+                results.append(None)
+        else:
+            results.append(None)
+    found = sum(1 for r in results if r is not None)
+    if found:
+        print(f"[marks] center marks found: {found}/2")
+    return results[0], results[1]
+
+
+def _solve_homography(
+    src_pts: np.ndarray,
+    dst_pts: np.ndarray,
+) -> np.ndarray:
+    """
+    Compute perspective transform matrix.
+    - 4 points  → getPerspectiveTransform (exact)
+    - 5-6 points → findHomography with RANSAC (least-squares, outlier-robust)
+      Falls back to 4-corner exact solve if RANSAC returns None.
+    """
+    if len(src_pts) == 4:
+        return cv2.getPerspectiveTransform(src_pts, dst_pts)
+
+    M, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 8.0)
+    if M is not None:
+        return M
+    # RANSAC failed — fall back to the 4 corner points
+    print("[homography] RANSAC failed, falling back to 4-corner solve")
+    return cv2.getPerspectiveTransform(src_pts[:4], dst_pts[:4])
+
+
+def find_four_marks_strict(
+    gray: np.ndarray,
+) -> Optional[list[tuple[float, float]]]:
+    """
+    Find 4 corner registration marks.
+    Returns [TL, TR, BL, BR] or None.
+    """
+    H, W = gray.shape
+    cands = _find_mark_candidates(gray)
 
     if len(cands) < 4:
         print(f"[strict] only {len(cands)} square-ish candidates found")
         return None
 
     # ── One candidate per corner quadrant ─────────────────────────────────────
-    # 4% dead-band at centre prevents a single mark from qualifying for two zones.
     quads_norm = [
         (0.00, 0.48, 0.00, 0.48),   # TL
         (0.52, 1.00, 0.00, 0.48),   # TR
         (0.00, 0.48, 0.52, 1.00),   # BL
         (0.52, 1.00, 0.52, 1.00),   # BR
     ]
-    # Ideal image-corner for each quadrant (marks should be near image edges)
-    ideal_corners = [(0, 0), (W, 0), (0, H), (W, H)]
 
     corners: list[tuple[float, float]] = []
-    for (nx0, nx1, ny0, ny1), (icx, icy) in zip(quads_norm, ideal_corners):
+    for (nx0, nx1, ny0, ny1) in quads_norm:
         in_q = [
             (cx, cy, a) for cx, cy, a in cands
             if nx0 * W <= cx < nx1 * W and ny0 * H <= cy < ny1 * H
@@ -224,9 +301,9 @@ def find_four_marks_strict(
             print(f"[strict] no candidate in quadrant "
                   f"x={nx0:.2f}-{nx1:.2f} y={ny0:.2f}-{ny1:.2f}")
             return None
-        # Pick the DARKEST candidate — registration marks are solid black.
-        # "Closest to corner" risks picking shadows, thumbs, or debris at the
-        # image edge instead of the actual mark.
+        # Pick the darkest candidate in each quadrant. Registration marks are
+        # solid black squares (uniformly dark), so they win against circle
+        # outlines, text, and partially-filled bubbles that share the quadrant.
         best = min(in_q, key=lambda c: _ring_mean(gray, int(c[0]), int(c[1]), 0, 8))
         corners.append((best[0], best[1]))
 
@@ -289,14 +366,24 @@ async def debug_scan(req: DetectRequest):
             return {"found": False, "warpedImage": None}
 
         tl, tr, bl, br = corners
-        src_pts = np.float32([tl, tr, bl, br])
-        dst_pts = np.float32([
-            [REG_NORM["TL"][0] * WARP_W, REG_NORM["TL"][1] * WARP_H],
-            [REG_NORM["TR"][0] * WARP_W, REG_NORM["TR"][1] * WARP_H],
-            [REG_NORM["BL"][0] * WARP_W, REG_NORM["BL"][1] * WARP_H],
-            [REG_NORM["BR"][0] * WARP_W, REG_NORM["BR"][1] * WARP_H],
-        ])
-        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+        cands = _find_mark_candidates(gray)
+        cl, cr = _find_center_marks(gray, cands, tl, tr, bl, br)
+
+        src_list = [tl, tr, bl, br]
+        dst_list = [
+            (REG_NORM["TL"][0] * WARP_W, REG_NORM["TL"][1] * WARP_H),
+            (REG_NORM["TR"][0] * WARP_W, REG_NORM["TR"][1] * WARP_H),
+            (REG_NORM["BL"][0] * WARP_W, REG_NORM["BL"][1] * WARP_H),
+            (REG_NORM["BR"][0] * WARP_W, REG_NORM["BR"][1] * WARP_H),
+        ]
+        if cl is not None:
+            src_list.append(cl); dst_list.append((REG_NORM["CL"][0] * WARP_W, REG_NORM["CL"][1] * WARP_H))
+        if cr is not None:
+            src_list.append(cr); dst_list.append((REG_NORM["CR"][0] * WARP_W, REG_NORM["CR"][1] * WARP_H))
+
+        src_pts = np.float32(src_list)
+        dst_pts = np.float32(dst_list)
+        M = _solve_homography(src_pts, dst_pts)
         warped = cv2.warpPerspective(gray, M, (WARP_W, WARP_H))
 
         # Draw bubble target circles for visual verification
@@ -341,44 +428,68 @@ async def scan(req: ScanRequest):
     try:
         gray = decode_gray(req.imageBase64)
         H, W = gray.shape
+        mark_keys: list[str] = []   # used by debug image writer below
 
-        corners = find_four_marks_strict(gray)
-        if corners is None:
-            return {"error": "Sheet not detected — make sure all 4 corner marks are visible"}
+        if req.corners:
+            # ── Manual-alignment mode ────────────────────────────────────────────
+            # The app measured the on-screen bracket positions, mapped them to
+            # image pixel coordinates, and sent them here.
+            # We use them directly — no mark detection needed.
+            tl = (float(req.corners[0][0]), float(req.corners[0][1]))
+            tr = (float(req.corners[1][0]), float(req.corners[1][1]))
+            bl = (float(req.corners[2][0]), float(req.corners[2][1]))
+            br = (float(req.corners[3][0]), float(req.corners[3][1]))
+            corners = [tl, tr, bl, br]
+            print(f"[scan] corner mode  tl={tl}  tr={tr}  bl={bl}  br={br}")
 
-        tl, tr, bl, br = corners
+            # Map paper corners → full warp rectangle
+            src_pts = np.float32([tl, tr, bl, br])
+            dst_pts = np.float32([
+                [0,      0     ],
+                [WARP_W, 0     ],
+                [0,      WARP_H],
+                [WARP_W, WARP_H],
+            ])
+            M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+            warped = cv2.warpPerspective(gray, M, (WARP_W, WARP_H))
 
-        # Perspective transform: photo corners → canonical warped space
-        src_pts = np.float32([tl, tr, bl, br])
-        dst_pts = np.float32([
-            [REG_NORM["TL"][0] * WARP_W, REG_NORM["TL"][1] * WARP_H],
-            [REG_NORM["TR"][0] * WARP_W, REG_NORM["TR"][1] * WARP_H],
-            [REG_NORM["BL"][0] * WARP_W, REG_NORM["BL"][1] * WARP_H],
-            [REG_NORM["BR"][0] * WARP_W, REG_NORM["BR"][1] * WARP_H],
-        ])
-        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-        warped = cv2.warpPerspective(gray, M, (WARP_W, WARP_H))
+            interior_median = float(np.median(
+                warped[int(WARP_H*0.1):int(WARP_H*0.9), int(WARP_W*0.1):int(WARP_W*0.9)]
+            ))
+            print(f"[scan] corner-warp interior: {interior_median:.0f}")
+            if interior_median < 100:
+                return {"error": "Image too dark — make sure the sheet is well lit"}
 
-        # ── Post-warp sanity: verify the 4 mark positions are actually dark ────────
-        # If the perspective transform used the wrong contours, the expected mark
-        # locations in warped space will be bright (paper) instead of dark (ink).
-        # Bubble radius in warped space ≈ 27.5px; mark is 20px → 50px in warp.
-        # Sample a 12px-radius circle at each expected mark center.
-        mark_w = [
-            (int(REG_NORM["TL"][0] * WARP_W), int(REG_NORM["TL"][1] * WARP_H)),
-            (int(REG_NORM["TR"][0] * WARP_W), int(REG_NORM["TR"][1] * WARP_H)),
-            (int(REG_NORM["BL"][0] * WARP_W), int(REG_NORM["BL"][1] * WARP_H)),
-            (int(REG_NORM["BR"][0] * WARP_W), int(REG_NORM["BR"][1] * WARP_H)),
-        ]
-        mark_b = [_ring_mean(warped, mx, my, 0, 12) for mx, my in mark_w]
-        # Adaptive threshold: marks must be darker than 65% of interior paper brightness.
-        # Using an absolute value (130) rejects valid scans with light-ink printing.
-        interior_median = float(np.median(warped[200:900, 150:650]))
-        mark_threshold = min(0.65 * interior_median, 160.0)
-        print(f"[scan] warp mark brightness (should be dark): {[f'{b:.0f}' for b in mark_b]}  "
-              f"interior={interior_median:.0f}  threshold={mark_threshold:.0f}")
-        if max(mark_b) > mark_threshold:
-            return {"error": "Sheet not aligned correctly — make sure all 4 corner marks are visible and flat"}
+        else:
+            # ── Auto-detect mode (fallback) ──────────────────────────────────────
+            corners = find_four_marks_strict(gray)
+            if corners is None:
+                return {"error": "Sheet not detected — align all 4 corners to the bracket guides"}
+
+            tl, tr, bl, br = corners
+            cands = _find_mark_candidates(gray)
+            cl, cr = _find_center_marks(gray, cands, tl, tr, bl, br)
+
+            src_list = [tl, tr, bl, br]
+            dst_list = [
+                (REG_NORM["TL"][0] * WARP_W, REG_NORM["TL"][1] * WARP_H),
+                (REG_NORM["TR"][0] * WARP_W, REG_NORM["TR"][1] * WARP_H),
+                (REG_NORM["BL"][0] * WARP_W, REG_NORM["BL"][1] * WARP_H),
+                (REG_NORM["BR"][0] * WARP_W, REG_NORM["BR"][1] * WARP_H),
+            ]
+            mark_keys = ["TL", "TR", "BL", "BR"]
+            if cl is not None:
+                src_list.append(cl)
+                dst_list.append((REG_NORM["CL"][0] * WARP_W, REG_NORM["CL"][1] * WARP_H))
+                mark_keys.append("CL")
+            if cr is not None:
+                src_list.append(cr)
+                dst_list.append((REG_NORM["CR"][0] * WARP_W, REG_NORM["CR"][1] * WARP_H))
+                mark_keys.append("CR")
+
+            M = _solve_homography(np.float32(src_list), np.float32(dst_list))
+            print(f"[scan] auto-detect from {len(src_list)} marks")
+            warped = cv2.warpPerspective(gray, M, (WARP_W, WARP_H))
 
         # ── Normalise warped image histogram ──────────────────────────────────────
         # Stretch the tonal range so white paper → 255 and darkest ink → near 0.
@@ -449,7 +560,7 @@ async def scan(req: ScanRequest):
                 answers.append("?")
                 confidence.append(0.0)
 
-        print(f"[scan] corners: {[f'({c[0]:.0f},{c[1]:.0f})' for c in corners]}")
+        print(f"[scan] src corners: tl={tl}  tr={tr}  bl={bl}  br={br}")
         for i, (ratios, inners, outers) in enumerate(
             zip(row_ratios, row_inner, row_outer)
         ):
@@ -458,6 +569,38 @@ async def scan(req: ScanRequest):
             rat_str   = ",".join(f"{v:.2f}" for v in ratios)
             print(f"[scan] Q{i+1}: inner=[{inner_str}] outer=[{outer_str}] "
                   f"ratio=[{rat_str}]→{answers[i]}")
+
+        # ── Save debug image ───────────────────────────────────────────────────
+        try:
+            vis = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
+            for row in range(GRID_ROWS):
+                for col in range(GRID_COLS):
+                    nx = 0.25 + col * 0.15
+                    ny = 0.22 + row * 0.13
+                    cx = int(nx * WARP_W)
+                    cy = int(ny * WARP_H)
+                    ratio = row_ratios[row][col]
+                    filled = answers[row] == LETTERS[col]
+                    color = (0, 255, 0) if filled else (0, 0, 255)  # green=picked, red=not
+                    thickness = 3 if filled else 1
+                    cv2.circle(vis, (cx, cy), INNER_R, color, thickness)
+                    cv2.putText(vis, f"{ratio:.2f}", (cx - 14, cy + 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+                # Label answer on right side
+                cv2.putText(vis, answers[row],
+                            (int(WARP_W * 0.88), int((0.22 + row * 0.13) * WARP_H) + 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 128, 0), 2)
+            # Draw registration mark positions
+            for k in mark_keys:
+                mx2 = int(REG_NORM[k][0] * WARP_W)
+                my2 = int(REG_NORM[k][1] * WARP_H)
+                cv2.drawMarker(vis, (mx2, my2), (255, 0, 128),
+                               cv2.MARKER_CROSS, 20, 2)
+            small = cv2.resize(vis, (320, 450))
+            cv2.imwrite(DEBUG_IMG_PATH, small)
+            print(f"[scan] debug image saved → {DEBUG_IMG_PATH}")
+        except Exception:
+            traceback.print_exc()
 
         bubble_brightness = row_ratios  # higher ratio = more filled
 

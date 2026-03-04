@@ -29,21 +29,66 @@ import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, QuizQuestion } from "@/lib/quiz-storage";
 
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
-const FRAME_SIZE = SCREEN_WIDTH * 0.78;
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+// Portrait frame matching the 320×450 answer sheet ratio (height = width × 1.40625)
+const FRAME_W = SCREEN_WIDTH * 0.72;
+const FRAME_H = FRAME_W * (450 / 320);
 const CORNER_SIZE = 28;
 const CORNER_THICKNESS = 3;
 
+// Orient → crop to frame area → resize. Returns base64 JPEG or null.
+async function cropToFrame(
+  photoUri: string,
+  framePos: { x: number; y: number; width: number; height: number },
+  targetWidth: number,
+  compress: number,
+): Promise<string | null> {
+  const step1 = await ImageManipulator.manipulateAsync(
+    photoUri,
+    [{ resize: { width: targetWidth } }],
+    { format: ImageManipulator.SaveFormat.JPEG },
+  );
+  let oriented = step1;
+  if (step1.width > step1.height) {
+    oriented = await ImageManipulator.manipulateAsync(
+      step1.uri,
+      [{ rotate: 90 }],
+      { format: ImageManipulator.SaveFormat.JPEG },
+    );
+  }
+  const imgPxPerPt = Math.min(
+    oriented.width / SCREEN_WIDTH,
+    oriented.height / SCREEN_HEIGHT,
+  );
+  const coverOffX = Math.max(0, (oriented.width - SCREEN_WIDTH * imgPxPerPt) / 2);
+  const coverOffY = Math.max(0, (oriented.height - SCREEN_HEIGHT * imgPxPerPt) / 2);
+  const MARGIN = 0.12;
+  const ix0 = Math.round(Math.max(0, coverOffX + (framePos.x - framePos.width * MARGIN) * imgPxPerPt));
+  const iy0 = Math.round(Math.max(0, coverOffY + (framePos.y - framePos.height * MARGIN) * imgPxPerPt));
+  const ix1 = Math.round(Math.min(oriented.width, coverOffX + (framePos.x + framePos.width * (1 + MARGIN)) * imgPxPerPt));
+  const iy1 = Math.round(Math.min(oriented.height, coverOffY + (framePos.y + framePos.height * (1 + MARGIN)) * imgPxPerPt));
+  if (ix1 - ix0 <= 0 || iy1 - iy0 <= 0) return null;
+  const result = await ImageManipulator.manipulateAsync(
+    oriented.uri,
+    [
+      { crop: { originX: ix0, originY: iy0, width: ix1 - ix0, height: iy1 - iy0 } },
+      { resize: { width: targetWidth } },
+    ],
+    { compress, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+  );
+  return result.base64 ?? null;
+}
+
 function CornerBracket({
   position,
-  detected = false,
+  detected,
 }: {
   position: "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
-  detected?: boolean;
+  detected: boolean;
 }) {
   const isTop = position.startsWith("top");
   const isLeft = position.endsWith("Left");
-  const color = detected ? "#00FF88" : Colors.scanFrame;
+  const color = detected ? Colors.success : Colors.scanFrame;
 
   return (
     <View
@@ -105,24 +150,62 @@ export default function ScannerScreen() {
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [sheetDetected, setSheetDetected] = useState(false);
   const cameraRef = useRef<any>(null);
+  const frameRef = useRef<View>(null);
   const isScanningRef = useRef(false);
-  const detectCountRef = useRef(0);
-  const lastAutoScanRef = useRef(0);
-  // Always points to the latest handleScan — fixes stale closure in the detect interval
-  const handleScanRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const isDetectingRef = useRef(false);
 
-  // Reset scan state every time this screen comes back into focus
-  // (after returning from results, the component stays mounted so refs aren't cleared)
+  // Lightweight detect poll: takes a low-quality frame every 3s and checks
+  // if the server can find the 4 registration marks in the cropped image.
+  const runDetect = useCallback(async () => {
+    if (isScanningRef.current || isDetectingRef.current || !cameraRef.current || !frameRef.current) return;
+    isDetectingRef.current = true;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.4,
+        base64: false,
+        skipProcessing: true,
+      });
+      const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
+        (resolve, reject) => {
+          if (!frameRef.current) return reject(new Error("no frame ref"));
+          (frameRef.current as any).measureInWindow(
+            (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
+          );
+        }
+      );
+      const b64 = await cropToFrame(photo.uri, framePos, 400, 0.4);
+      if (!b64) { setSheetDetected(false); return; }
+      const resp = await fetch(`${getApiBase()}/api/detect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: b64 }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setSheetDetected(!!data.found);
+      }
+    } catch {
+      // silent — detection errors don't block scanning
+    } finally {
+      isDetectingRef.current = false;
+    }
+  }, []);
+
+  // Reset scan state and start live detection every time this screen is focused
   useFocusEffect(
     useCallback(() => {
       isScanningRef.current = false;
-      detectCountRef.current = 0;
-      lastAutoScanRef.current = 0;   // clear cooldown so auto-scan works immediately
       setIsScanning(false);
       setScanDone(false);
       setScanError(null);
       setSheetDetected(false);
-    }, [])
+      runDetect();
+      const detectInterval = setInterval(runDetect, 3000);
+      return () => {
+        clearInterval(detectInterval);
+        setSheetDetected(false);
+      };
+    }, [runDetect])
   );
 
   const scanLineY = useSharedValue(0);
@@ -160,59 +243,11 @@ export default function ScannerScreen() {
     );
   }, []);
 
-  // Auto-detect: poll every 2s, auto-scan when sheet found 2 frames in a row
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      if (isScanningRef.current || !cameraRef.current) return;
-      try {
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.8,
-          base64: false,
-        });
-        const resized = await ImageManipulator.manipulateAsync(
-          photo.uri,
-          [{ resize: { width: 500 } }],
-          { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG, base64: true }
-        );
-        if (!resized.base64) return;
-
-        const response = await fetch(`${getApiBase()}/api/detect`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageBase64: resized.base64 }),
-        });
-        if (!response.ok) return;
-        const data = await response.json();
-
-        setSheetDetected(data.found);
-
-        if (data.found) {
-          detectCountRef.current += 1;
-          // Auto-scan after 2 consecutive detections, with a 5s cooldown
-          if (
-            detectCountRef.current >= 2 &&
-            !isScanningRef.current &&
-            Date.now() - lastAutoScanRef.current > 5000
-          ) {
-            detectCountRef.current = 0;
-            lastAutoScanRef.current = Date.now();
-            handleScanRef.current();
-          }
-        } else {
-          detectCountRef.current = 0;
-        }
-      } catch {
-        // ignore detection errors silently
-      }
-    }, 2000);
-
-    return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questions]);
+  // No auto-detect — user manually aligns the sheet to the corner brackets and taps Scan
 
   const scanLineStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateY: interpolate(scanLineY.value, [0, 1], [0, FRAME_SIZE]) },
+      { translateY: interpolate(scanLineY.value, [0, 1], [0, FRAME_H]) },
     ],
     opacity: isScanning ? 1 : 0.5,
   }));
@@ -226,7 +261,7 @@ export default function ScannerScreen() {
     transform: [{ scale: pulseScale.value }],
   }));
 
-  const handleScan = async () => {
+  const handleScan = useCallback(async () => {
     if (isScanningRef.current) return;
     isScanningRef.current = true;
     setScanError(null);
@@ -236,28 +271,36 @@ export default function ScannerScreen() {
     try {
       if (!cameraRef.current) throw new Error("Camera not ready");
 
+      // Measure the frame position on screen BEFORE taking the photo
+      const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
+        (resolve, reject) => {
+          if (!frameRef.current) return reject(new Error("frame ref not ready"));
+          (frameRef.current as any).measureInWindow(
+            (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
+          );
+        }
+      );
+
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.9,
         base64: false,
         skipProcessing: false,
       });
 
-      const resized = await ImageManipulator.manipulateAsync(
-        photo.uri,
-        [{ resize: { width: 800 } }],
-        { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG, base64: true }
-      );
-      if (!resized.base64) throw new Error("Image capture failed");
+      // Crop to frame area + orient to portrait — gives server a clean sheet image
+      const base64 = await cropToFrame(photo.uri, framePos, 800, 0.9);
+      if (!base64) throw new Error("Image capture failed");
 
+      // Server detects registration marks in the (now clean, pre-cropped) image
       const resp = await fetch(`${getApiBase()}/api/scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: resized.base64, questions }),
+        body: JSON.stringify({ imageBase64: base64, questions }),
       });
       if (!resp.ok) throw new Error("Server error");
       const data = await resp.json();
       if (data.error || !data.answers) {
-        throw new Error(data.error ?? "Sheet not detected — make sure all 4 corner marks are visible");
+        throw new Error(data.error ?? "Fit the sheet inside the frame and try again");
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -274,15 +317,21 @@ export default function ScannerScreen() {
     } catch (err: any) {
       console.error("Scan failed:", err);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setScanError(err?.message ?? "Scan failed — make sure the server is running and sheet is visible.");
+      setScanError(err?.message ?? "Scan failed — make sure the server is running.");
     } finally {
       isScanningRef.current = false;
       setIsScanning(false);
       setScanDone(false);
     }
-  };
-  // Keep ref current on every render so the detect interval always calls the latest version
-  handleScanRef.current = handleScan;
+  }, [questions]);
+
+  // Auto-scan: when the sheet is detected (brackets turn green), wait 700ms then scan
+  // automatically. Timer is cleared if the sheet moves out of frame before firing.
+  useEffect(() => {
+    if (!sheetDetected || isScanningRef.current) return;
+    const timer = setTimeout(handleScan, 700);
+    return () => clearTimeout(timer);
+  }, [sheetDetected, handleScan]);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
@@ -352,11 +401,13 @@ export default function ScannerScreen() {
             </Pressable>
           </View>
         </View>
-        <Text style={styles.headerSub}>Point at the answer sheet to scan</Text>
+        <Text style={[styles.headerSub, sheetDetected && { color: Colors.success }]}>
+          {sheetDetected ? "Sheet detected — tap Scan!" : "Fit the sheet inside the brackets, then tap Scan"}
+        </Text>
       </Animated.View>
 
       <View style={styles.frameContainer}>
-        <Animated.View style={[styles.frameWrapper, pulseStyle]}>
+        <Animated.View ref={frameRef} style={[styles.frameWrapper, pulseStyle]}>
           <Animated.View style={[styles.frameGlow, frameGlowStyle]} />
 
           <View style={styles.frame}>
@@ -390,9 +441,7 @@ export default function ScannerScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInDown.duration(500).delay(200)}>
-          <Text style={styles.frameLabel}>
-            {sheetDetected ? "Sheet detected — tap Scan Sheet to capture" : "Align answer sheet within frame"}
-          </Text>
+          <Text style={styles.frameLabel}>Fit the sheet inside the brackets — hold the phone flat</Text>
         </Animated.View>
       </View>
 
@@ -515,15 +564,15 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   frameWrapper: {
-    width: FRAME_SIZE,
-    height: FRAME_SIZE,
+    width: FRAME_W,
+    height: FRAME_H,
     alignItems: "center",
     justifyContent: "center",
   },
   frameGlow: {
     position: "absolute",
-    width: FRAME_SIZE + 20,
-    height: FRAME_SIZE + 20,
+    width: FRAME_W + 20,
+    height: FRAME_H + 20,
     borderRadius: 4,
     shadowColor: Colors.accent,
     shadowOffset: { width: 0, height: 0 },
@@ -532,8 +581,8 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   frame: {
-    width: FRAME_SIZE,
-    height: FRAME_SIZE,
+    width: FRAME_W,
+    height: FRAME_H,
     position: "relative",
     overflow: "hidden",
   },

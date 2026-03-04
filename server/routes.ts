@@ -23,6 +23,8 @@ const QuizQuestionSchema = z.object({
 const ScanRequestSchema = z.object({
   imageBase64: z.string().min(100),
   questions: z.array(QuizQuestionSchema).length(5),
+  // [[x,y],[x,y],[x,y],[x,y]] TL,TR,BL,BR — sent by app when using manual alignment
+  corners: z.array(z.tuple([z.number(), z.number()])).length(4).optional(),
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
