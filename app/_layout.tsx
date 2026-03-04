@@ -21,6 +21,8 @@ function RootLayoutNav() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="index" />
       <Stack.Screen name="results" options={{ presentation: "card" }} />
+      <Stack.Screen name="setup" options={{ presentation: "card" }} />
+      <Stack.Screen name="sheet" options={{ presentation: "card" }} />
     </Stack>
   );
 }

@@ -55,6 +55,7 @@ function setupCors(app: express.Application) {
 function setupBodyParsing(app: express.Application) {
   app.use(
     express.json({
+      limit: "10mb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
       },
@@ -236,15 +237,8 @@ function setupErrorHandler(app: express.Application) {
 
   setupErrorHandler(app);
 
-  const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`express server serving on port ${port}`);
-    },
-  );
+  const port = parseInt(process.env.PORT || "5001", 10);
+  server.listen(port, "0.0.0.0", () => {
+    log(`express server serving on port ${port}`);
+  });
 })();

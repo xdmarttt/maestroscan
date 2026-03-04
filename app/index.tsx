@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   Pressable,
   Platform,
   Dimensions,
+  Alert,
 } from "react-native";
 import { router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,43 +22,27 @@ import Animated, {
   FadeInDown,
 } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
+import * as ImageManipulator from "expo-image-manipulator";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
+import { loadQuiz, QuizQuestion } from "@/lib/quiz-storage";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const FRAME_SIZE = SCREEN_WIDTH * 0.78;
 const CORNER_SIZE = 28;
 const CORNER_THICKNESS = 3;
 
-export const QUESTIONS = [
-  {
-    id: 1,
-    text: "What is the capital of France?",
-    choices: ["A. Paris", "B. London", "C. Berlin", "D. Madrid"],
-    correct: "A",
-  },
-  {
-    id: 2,
-    text: "What is 7 × 8?",
-    choices: ["A. 54", "B. 56", "C. 58", "D. 62"],
-    correct: "B",
-  },
-  {
-    id: 3,
-    text: "Which planet is closest to the Sun?",
-    choices: ["A. Earth", "B. Venus", "C. Mars", "D. Mercury"],
-    correct: "D",
-  },
-];
-
 function CornerBracket({
   position,
+  detected = false,
 }: {
   position: "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+  detected?: boolean;
 }) {
   const isTop = position.startsWith("top");
   const isLeft = position.endsWith("Left");
+  const color = detected ? "#00FF88" : Colors.scanFrame;
 
   return (
     <View
@@ -76,6 +61,7 @@ function CornerBracket({
           isLeft
             ? { left: 0, borderLeftWidth: CORNER_THICKNESS }
             : { right: 0, borderRightWidth: CORNER_THICKNESS },
+          { borderColor: color },
         ]}
       />
       <View
@@ -87,10 +73,26 @@ function CornerBracket({
           isLeft
             ? { left: 0, borderLeftWidth: CORNER_THICKNESS }
             : { right: 0, borderRightWidth: CORNER_THICKNESS },
+          { borderColor: color },
         ]}
       />
     </View>
   );
+}
+
+function getApiBase(): string {
+  const domain = process.env.EXPO_PUBLIC_DOMAIN;
+  if (domain) {
+    const isLocal =
+      domain.startsWith("localhost") ||
+      domain.startsWith("127.") ||
+      domain.startsWith("192.168.") ||
+      domain.startsWith("10.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(domain);
+    const protocol = isLocal ? "http" : "https";
+    return `${protocol}://${domain}`;
+  }
+  return "http://localhost:5001";
 }
 
 export default function ScannerScreen() {
@@ -98,10 +100,23 @@ export default function ScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [isScanning, setIsScanning] = useState(false);
   const [scanDone, setScanDone] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [questions, setQuestions] = useState<QuizQuestion[]>([]);
+  const [sheetDetected, setSheetDetected] = useState(false);
+  const cameraRef = useRef<any>(null);
+  const isScanningRef = useRef(false);
+  const detectCountRef = useRef(0);
+  const lastAutoScanRef = useRef(0);
+  // Always points to the latest handleScan — fixes stale closure in the detect interval
+  const handleScanRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
   const scanLineY = useSharedValue(0);
   const frameGlow = useSharedValue(0);
   const pulseScale = useSharedValue(1);
+
+  useEffect(() => {
+    loadQuiz().then((config) => setQuestions(config.questions));
+  }, []);
 
   useEffect(() => {
     scanLineY.value = withRepeat(
@@ -130,6 +145,56 @@ export default function ScannerScreen() {
     );
   }, []);
 
+  // Auto-detect: poll every 2s, auto-scan when sheet found 2 frames in a row
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (isScanningRef.current || !cameraRef.current) return;
+      try {
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.8,
+          base64: false,
+        });
+        const resized = await ImageManipulator.manipulateAsync(
+          photo.uri,
+          [{ resize: { width: 500 } }],
+          { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+        );
+        if (!resized.base64) return;
+
+        const response = await fetch(`${getApiBase()}/api/detect`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: resized.base64 }),
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+
+        setSheetDetected(data.found);
+
+        if (data.found) {
+          detectCountRef.current += 1;
+          // Auto-scan after 2 consecutive detections, with a 5s cooldown
+          if (
+            detectCountRef.current >= 2 &&
+            !isScanningRef.current &&
+            Date.now() - lastAutoScanRef.current > 5000
+          ) {
+            detectCountRef.current = 0;
+            lastAutoScanRef.current = Date.now();
+            handleScanRef.current();
+          }
+        } else {
+          detectCountRef.current = 0;
+        }
+      } catch {
+        // ignore detection errors silently
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions]);
+
   const scanLineStyle = useAnimatedStyle(() => ({
     transform: [
       { translateY: interpolate(scanLineY.value, [0, 1], [0, FRAME_SIZE]) },
@@ -147,30 +212,79 @@ export default function ScannerScreen() {
   }));
 
   const handleScan = async () => {
-    if (isScanning) return;
+    if (isScanningRef.current) return;
+    isScanningRef.current = true;
+    setScanError(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setIsScanning(true);
 
-    await new Promise((r) => setTimeout(r, 2800));
+    try {
+      if (!cameraRef.current) throw new Error("Camera not ready");
 
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setScanDone(true);
+      // 1. Capture photo
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.9,
+        base64: false,
+        skipProcessing: false,
+      });
 
-    await new Promise((r) => setTimeout(r, 500));
+      // 2. Resize to 800px wide for fast upload
+      const resized = await ImageManipulator.manipulateAsync(
+        photo.uri,
+        [{ resize: { width: 800 } }],
+        {
+          compress: 0.85,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: true,
+        }
+      );
 
-    const simulatedAnswers = ["A", "B", "A"];
+      if (!resized.base64) throw new Error("Failed to encode image");
 
-    router.push({
-      pathname: "/results",
-      params: {
-        answers: JSON.stringify(simulatedAnswers),
-        questions: JSON.stringify(QUESTIONS),
-      },
-    });
+      // 3. Send to server for processing
+      const response = await fetch(`${getApiBase()}/api/scan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageBase64: resized.base64,
+          questions,
+        }),
+      });
 
-    setIsScanning(false);
-    setScanDone(false);
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Server error ${response.status}: ${err}`);
+      }
+
+      const data = await response.json();
+
+      if (data.error) throw new Error(data.error);
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setScanDone(true);
+      await new Promise((r) => setTimeout(r, 400));
+
+      router.push({
+        pathname: "/results",
+        params: {
+          answers: JSON.stringify(data.answers),
+          questions: JSON.stringify(questions),
+        },
+      });
+    } catch (err: any) {
+      console.error("Scan failed:", err);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setScanError(err?.message?.includes("not detected")
+        ? "Sheet not detected — make sure all 4 corner marks are visible."
+        : "Scan failed — make sure the server is running and sheet is visible.");
+    } finally {
+      isScanningRef.current = false;
+      setIsScanning(false);
+      setScanDone(false);
+    }
   };
+  // Keep ref current on every render so the detect interval always calls the latest version
+  handleScanRef.current = handleScan;
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
@@ -207,7 +321,7 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
-      <CameraScanner />
+      <CameraScanner ref={cameraRef} />
 
       <View style={[StyleSheet.absoluteFill, styles.overlay]} />
 
@@ -220,8 +334,24 @@ export default function ScannerScreen() {
             <MaterialCommunityIcons name="scan-helper" size={22} color={Colors.accent} />
             <Text style={styles.appName}>GradeSnap</Text>
           </View>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{QUESTIONS.length} Qs</Text>
+          <View style={styles.headerActions}>
+            <Pressable
+              onPress={() => router.push("/setup")}
+              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+            >
+              <Ionicons name="settings-outline" size={20} color={Colors.textSecondary} />
+            </Pressable>
+            <Pressable
+              onPress={() =>
+                router.push({
+                  pathname: "/sheet",
+                  params: { questions: JSON.stringify(questions) },
+                })
+              }
+              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+            >
+              <Ionicons name="document-outline" size={20} color={Colors.textSecondary} />
+            </Pressable>
           </View>
         </View>
         <Text style={styles.headerSub}>Point at the answer sheet to scan</Text>
@@ -234,7 +364,7 @@ export default function ScannerScreen() {
           <View style={styles.frame}>
             {(["topLeft", "topRight", "bottomLeft", "bottomRight"] as const).map(
               (pos) => (
-                <CornerBracket key={pos} position={pos} />
+                <CornerBracket key={pos} position={pos} detected={sheetDetected} />
               )
             )}
 
@@ -262,7 +392,9 @@ export default function ScannerScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInDown.duration(500).delay(200)}>
-          <Text style={styles.frameLabel}>Align answer sheet within frame</Text>
+          <Text style={styles.frameLabel}>
+            {sheetDetected ? "Sheet detected — tap Scan Sheet to capture" : "Align answer sheet within frame"}
+          </Text>
         </Animated.View>
       </View>
 
@@ -273,11 +405,11 @@ export default function ScannerScreen() {
         <View style={styles.answerKeyHeader}>
           <Text style={styles.answerKeyTitle}>Answer Key</Text>
           <View style={styles.answerKeyDot} />
-          <Text style={styles.answerKeyCount}>{QUESTIONS.length} Questions</Text>
+          <Text style={styles.answerKeyCount}>{questions.length} Questions</Text>
         </View>
 
         <View style={styles.answerKeyRow}>
-          {QUESTIONS.map((q) => (
+          {questions.map((q) => (
             <View key={q.id} style={styles.answerKeyItem}>
               <Text style={styles.answerKeyQNum}>Q{q.id}</Text>
               <View style={styles.answerKeyBubble}>
@@ -287,9 +419,16 @@ export default function ScannerScreen() {
           ))}
         </View>
 
+        {scanError && (
+          <View style={styles.errorRow}>
+            <Ionicons name="warning-outline" size={14} color={Colors.error} />
+            <Text style={styles.errorText}>{scanError}</Text>
+          </View>
+        )}
+
         <Pressable
           onPress={handleScan}
-          disabled={isScanning}
+          disabled={isScanning || questions.length === 0}
           style={({ pressed }) => [
             styles.scanBtn,
             isScanning && styles.scanBtnScanning,
@@ -356,19 +495,13 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     letterSpacing: -0.3,
   },
-  badge: {
-    backgroundColor: Colors.accentDim,
-    borderWidth: 1,
-    borderColor: Colors.accent,
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+  headerActions: {
+    flexDirection: "row",
+    gap: 4,
   },
-  badgeText: {
-    fontSize: 11,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.accent,
-    letterSpacing: 0.5,
+  iconBtn: {
+    padding: 8,
+    borderRadius: 20,
   },
   headerSub: {
     fontSize: 13,
@@ -504,28 +637,28 @@ const styles = StyleSheet.create({
   },
   answerKeyRow: {
     flexDirection: "row",
-    gap: 12,
+    gap: 8,
   },
   answerKeyItem: {
     flex: 1,
     alignItems: "center",
-    gap: 8,
+    gap: 6,
     backgroundColor: Colors.surfaceElevated,
     borderRadius: 14,
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderWidth: 1,
     borderColor: Colors.border,
   },
   answerKeyQNum: {
-    fontSize: 11,
+    fontSize: 10,
     fontFamily: "Inter_500Medium",
     color: Colors.textMuted,
     letterSpacing: 0.5,
   },
   answerKeyBubble: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: Colors.accentDim,
     borderWidth: 1.5,
     borderColor: Colors.accent,
@@ -533,9 +666,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   answerKeyLetter: {
-    fontSize: 16,
+    fontSize: 14,
     fontFamily: "Inter_700Bold",
     color: Colors.accent,
+  },
+  errorRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    backgroundColor: Colors.errorDim,
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: Colors.error,
+  },
+  errorText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: Colors.error,
+    lineHeight: 16,
   },
   scanBtn: {
     backgroundColor: Colors.accent,

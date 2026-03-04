@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GradeSnap Answer Sheet — TEST (2/5)</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #eee;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+      font-family: Arial, sans-serif;
+    }
+    .print-hint {
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: #555;
+      background: #d4edda;
+      border: 1px solid #28a745;
+      border-radius: 6px;
+      padding: 10px 16px;
+      max-width: 640px;
+      text-align: center;
+    }
+    /* Scale 2× on screen for readability, but sheet dimensions stay 320×450 */
+    .sheet-wrapper {
+      transform: scale(2);
+      transform-origin: top center;
+      margin-bottom: 470px;
+    }
+    .sheet {
+      position: relative;
+      width: 320px;
+      height: 450px;
+      background: white;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    }
+
+    /* Registration marks — MUST match server/scan.ts */
+    .reg {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background: #000;
+    }
+    .reg.tl { left: 9.6px;  top: 18px; }
+    .reg.tr { right: 9.6px; top: 18px; }
+    .reg.bl { left: 9.6px;  bottom: 18px; }
+    .reg.br { right: 9.6px; bottom: 18px; }
+
+    .title {
+      position: absolute;
+      top: 30px; left: 0; right: 0;
+      text-align: center;
+      font-size: 13px; font-weight: 800; color: #000;
+    }
+    .subtitle {
+      position: absolute;
+      top: 46px; left: 0; right: 0;
+      text-align: center;
+      font-size: 9px; color: #888;
+    }
+
+    .col-header {
+      position: absolute;
+      width: 16px; text-align: center;
+      font-size: 11px; font-weight: 700; color: #000;
+      top: 65px;
+    }
+    .col-header.a { left: calc(0.25*320px - 8px); }
+    .col-header.b { left: calc(0.40*320px - 8px); }
+    .col-header.c { left: calc(0.55*320px - 8px); }
+    .col-header.d { left: calc(0.70*320px - 8px); }
+
+    .row-label {
+      position: absolute;
+      left: 28px; width: 20px;
+      text-align: right;
+      font-size: 11px; font-weight: 600; color: #333;
+    }
+
+    .bubble {
+      position: absolute;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      border: 1.5px solid #000;
+      background: white;
+    }
+
+    /* Filled bubble — simulates a dark pencil mark */
+    .bubble.filled {
+      background: #1a1a1a;
+      border-color: #000;
+    }
+
+    .footer-note {
+      position: absolute;
+      bottom: 30px; left: 0; right: 0;
+      text-align: center;
+      font-size: 9px; color: #666; font-style: italic;
+    }
+
+    /* Legend */
+    .legend {
+      position: absolute;
+      top: 88px; right: 36px;
+      font-size: 8px; color: #666;
+    }
+
+    @media print {
+      body { background: white; padding: 0; }
+      .print-hint { display: none; }
+      .sheet-wrapper { transform: none; margin-bottom: 0; }
+      .sheet { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="print-hint">
+    TEST SHEET — Expected score: <strong>2 / 5</strong><br>
+    Filled: Q1=<strong>A</strong> ✓ &nbsp; Q2=<strong>B</strong> ✓ &nbsp; Q3=<strong>C</strong> ✗ &nbsp; Q4=<strong>A</strong> ✗ &nbsp; Q5=<strong>B</strong> ✗<br>
+    Print at <strong>100% / actual size</strong> (Cmd+P)
+  </div>
+
+  <div class="sheet-wrapper">
+    <div class="sheet">
+
+      <!-- Registration marks -->
+      <div class="reg tl"></div>
+      <div class="reg tr"></div>
+      <div class="reg bl"></div>
+      <div class="reg br"></div>
+
+      <div class="title">GradeSnap</div>
+      <div class="subtitle">Answer Sheet &nbsp;•&nbsp; TEST</div>
+
+      <!-- Column headers -->
+      <div class="col-header a">A</div>
+      <div class="col-header b">B</div>
+      <div class="col-header c">C</div>
+      <div class="col-header d">D</div>
+
+      <!-- Row 1  ny=0.22 → y=99  | Answer: A (CORRECT — default key Q1=A) -->
+      <div class="row-label" style="top:91px">1</div>
+      <div class="bubble filled" style="left:69px;  top:88px"></div>  <!-- A ✓ -->
+      <div class="bubble"        style="left:117px; top:88px"></div>
+      <div class="bubble"        style="left:165px; top:88px"></div>
+      <div class="bubble"        style="left:213px; top:88px"></div>
+
+      <!-- Row 2  ny=0.35 → y=157 | Answer: B (CORRECT — default key Q2=B) -->
+      <div class="row-label" style="top:149px">2</div>
+      <div class="bubble"        style="left:69px;  top:146px"></div>
+      <div class="bubble filled" style="left:117px; top:146px"></div> <!-- B ✓ -->
+      <div class="bubble"        style="left:165px; top:146px"></div>
+      <div class="bubble"        style="left:213px; top:146px"></div>
+
+      <!-- Row 3  ny=0.48 → y=216 | Answer: C (WRONG — default key Q3=D) -->
+      <div class="row-label" style="top:208px">3</div>
+      <div class="bubble"        style="left:69px;  top:205px"></div>
+      <div class="bubble"        style="left:117px; top:205px"></div>
+      <div class="bubble filled" style="left:165px; top:205px"></div> <!-- C ✗ -->
+      <div class="bubble"        style="left:213px; top:205px"></div>
+
+      <!-- Row 4  ny=0.61 → y=274 | Answer: A (WRONG — default key Q4=B) -->
+      <div class="row-label" style="top:266px">4</div>
+      <div class="bubble filled" style="left:69px;  top:263px"></div> <!-- A ✗ -->
+      <div class="bubble"        style="left:117px; top:263px"></div>
+      <div class="bubble"        style="left:165px; top:263px"></div>
+      <div class="bubble"        style="left:213px; top:263px"></div>
+
+      <!-- Row 5  ny=0.74 → y=333 | Answer: B (WRONG — default key Q5=D) -->
+      <div class="row-label" style="top:325px">5</div>
+      <div class="bubble"        style="left:69px;  top:322px"></div>
+      <div class="bubble filled" style="left:117px; top:322px"></div> <!-- B ✗ -->
+      <div class="bubble"        style="left:165px; top:322px"></div>
+      <div class="bubble"        style="left:213px; top:322px"></div>
+
+      <div class="footer-note">Fill circles completely with dark pencil or pen</div>
+
+    </div>
+  </div>
+
+</body>
+</html>

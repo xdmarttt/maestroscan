@@ -1,0 +1,65 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+export interface QuizQuestion {
+  id: number;
+  text: string;
+  choices: string[]; // ["A. ...", "B. ...", "C. ...", "D. ..."]
+  correct: "A" | "B" | "C" | "D";
+}
+
+export interface QuizConfig {
+  questions: QuizQuestion[];
+  createdAt: number;
+}
+
+const QUIZ_KEY = "gradesnap:quiz_config";
+
+export const DEFAULT_QUIZ: QuizConfig = {
+  questions: [
+    {
+      id: 1,
+      text: "What is the capital of France?",
+      choices: ["A. Paris", "B. London", "C. Berlin", "D. Madrid"],
+      correct: "A",
+    },
+    {
+      id: 2,
+      text: "What is 7 × 8?",
+      choices: ["A. 54", "B. 56", "C. 58", "D. 62"],
+      correct: "B",
+    },
+    {
+      id: 3,
+      text: "Which planet is closest to the Sun?",
+      choices: ["A. Earth", "B. Venus", "C. Mars", "D. Mercury"],
+      correct: "D",
+    },
+    {
+      id: 4,
+      text: "What is the chemical symbol for water?",
+      choices: ["A. O2", "B. H2O", "C. CO2", "D. NaCl"],
+      correct: "B",
+    },
+    {
+      id: 5,
+      text: "How many sides does a hexagon have?",
+      choices: ["A. 5", "B. 7", "C. 8", "D. 6"],
+      correct: "D",
+    },
+  ],
+  createdAt: 0,
+};
+
+export async function loadQuiz(): Promise<QuizConfig> {
+  try {
+    const raw = await AsyncStorage.getItem(QUIZ_KEY);
+    if (!raw) return DEFAULT_QUIZ;
+    return JSON.parse(raw) as QuizConfig;
+  } catch {
+    return DEFAULT_QUIZ;
+  }
+}
+
+export async function saveQuiz(config: QuizConfig): Promise<void> {
+  await AsyncStorage.setItem(QUIZ_KEY, JSON.stringify(config));
+}

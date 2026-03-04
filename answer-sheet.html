@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GradeSnap Answer Sheet</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #eee;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+      font-family: Arial, sans-serif;
+    }
+
+    .print-hint {
+      margin-bottom: 16px;
+      font-size: 14px;
+      color: #555;
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 6px;
+      padding: 10px 16px;
+    }
+
+    /* The sheet itself is exactly 320×450 px at 96dpi.
+       For printing, we scale it up 2× (640×900px on screen) via CSS transform.
+       The pixel coordinates in server/scan.ts and app/sheet.tsx
+       are based on 320×450 so DO NOT change SHEET_W / SHEET_H. */
+    .sheet-wrapper {
+      transform: scale(2);
+      transform-origin: top center;
+      margin-bottom: 470px; /* compensate for scale */
+    }
+
+    .sheet {
+      position: relative;
+      width: 320px;
+      height: 450px;
+      background: white;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    }
+
+    /* Registration marks — MUST match server/scan.ts REG_NORM constants */
+    .reg {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background: #000;
+    }
+    .reg.tl { left: 9.6px;  top: 18px; }
+    .reg.tr { right: 9.6px; top: 18px; }
+    .reg.bl { left: 9.6px;  bottom: 18px; }
+    .reg.br { right: 9.6px; bottom: 18px; }
+
+    /* Title */
+    .title {
+      position: absolute;
+      top: 30px;
+      left: 0; right: 0;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 800;
+      color: #000;
+      letter-spacing: -0.3px;
+    }
+    .subtitle {
+      position: absolute;
+      top: 46px;
+      left: 0; right: 0;
+      text-align: center;
+      font-size: 9px;
+      color: #888;
+    }
+
+    /* Column headers A B C D */
+    .col-header {
+      position: absolute;
+      width: 16px;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: #000;
+      top: 65px;
+    }
+    .col-header.a { left: calc(0.25*320px - 8px); } /* 72px */
+    .col-header.b { left: calc(0.40*320px - 8px); } /* 120px */
+    .col-header.c { left: calc(0.55*320px - 8px); } /* 168px */
+    .col-header.d { left: calc(0.70*320px - 8px); } /* 216px */
+
+    /* Row number labels */
+    /* left: 0.12*320=38.4, right-align in 20px */
+    .row-label {
+      position: absolute;
+      left: 28px;
+      width: 20px;
+      text-align: right;
+      font-size: 11px;
+      font-weight: 600;
+      color: #333;
+    }
+
+    /* Bubbles: diameter=22, radius=11
+       center: nx*320, ny*450
+       left = nx*320 - 11
+       top  = ny*450 - 11 */
+    .bubble {
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 1.5px solid #000;
+      background: white;
+    }
+
+    .footer-note {
+      position: absolute;
+      bottom: 30px;
+      left: 0; right: 0;
+      text-align: center;
+      font-size: 9px;
+      color: #666;
+      font-style: italic;
+    }
+
+    @media print {
+      body { background: white; padding: 0; }
+      .print-hint { display: none; }
+      .sheet-wrapper { transform: none; margin-bottom: 0; }
+      .sheet { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="print-hint">
+    Press <strong>Ctrl+P</strong> (or <strong>Cmd+P</strong> on Mac) to print.
+    Print at <strong>100% scale / actual size</strong> — do not fit to page.
+  </div>
+
+  <div class="sheet-wrapper">
+    <div class="sheet">
+
+      <!-- Registration marks -->
+      <div class="reg tl"></div>
+      <div class="reg tr"></div>
+      <div class="reg bl"></div>
+      <div class="reg br"></div>
+
+      <!-- Title -->
+      <div class="title">GradeSnap</div>
+      <div class="subtitle">Answer Sheet &nbsp;•&nbsp; 5 Questions</div>
+
+      <!-- Column headers -->
+      <div class="col-header a">A</div>
+      <div class="col-header b">B</div>
+      <div class="col-header c">C</div>
+      <div class="col-header d">D</div>
+
+      <!-- Rows 1–5
+           ny values: 0.22, 0.35, 0.48, 0.61, 0.74
+           row-label top = ny*450 - 8
+           bubble top  = ny*450 - 11
+      -->
+
+      <!-- Row 1  ny=0.22 → y=99 -->
+      <div class="row-label" style="top:91px">1</div>
+      <div class="bubble" style="left:69px; top:88px"></div>   <!-- A: 0.25*320-11=69 -->
+      <div class="bubble" style="left:117px; top:88px"></div>  <!-- B: 0.40*320-11=117 -->
+      <div class="bubble" style="left:165px; top:88px"></div>  <!-- C: 0.55*320-11=165 -->
+      <div class="bubble" style="left:213px; top:88px"></div>  <!-- D: 0.70*320-11=213 -->
+
+      <!-- Row 2  ny=0.35 → y=157.5 -->
+      <div class="row-label" style="top:149px">2</div>
+      <div class="bubble" style="left:69px; top:146px"></div>
+      <div class="bubble" style="left:117px; top:146px"></div>
+      <div class="bubble" style="left:165px; top:146px"></div>
+      <div class="bubble" style="left:213px; top:146px"></div>
+
+      <!-- Row 3  ny=0.48 → y=216 -->
+      <div class="row-label" style="top:208px">3</div>
+      <div class="bubble" style="left:69px; top:205px"></div>
+      <div class="bubble" style="left:117px; top:205px"></div>
+      <div class="bubble" style="left:165px; top:205px"></div>
+      <div class="bubble" style="left:213px; top:205px"></div>
+
+      <!-- Row 4  ny=0.61 → y=274.5 -->
+      <div class="row-label" style="top:266px">4</div>
+      <div class="bubble" style="left:69px; top:263px"></div>
+      <div class="bubble" style="left:117px; top:263px"></div>
+      <div class="bubble" style="left:165px; top:263px"></div>
+      <div class="bubble" style="left:213px; top:263px"></div>
+
+      <!-- Row 5  ny=0.74 → y=333 -->
+      <div class="row-label" style="top:325px">5</div>
+      <div class="bubble" style="left:69px; top:322px"></div>
+      <div class="bubble" style="left:117px; top:322px"></div>
+      <div class="bubble" style="left:165px; top:322px"></div>
+      <div class="bubble" style="left:213px; top:322px"></div>
+
+      <div class="footer-note">Fill circles completely with dark pencil or pen</div>
+
+    </div>
+  </div>
+
+</body>
+</html>

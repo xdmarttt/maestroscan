@@ -1,25 +1,26 @@
-import React from "react";
+import React, { forwardRef } from "react";
 import { View, StyleSheet, Platform } from "react-native";
-import Colors from "@/constants/colors";
 
-let CameraView: React.ComponentType<{ style?: any; facing?: string }> | null = null;
+let CameraViewComponent: React.ComponentType<{ style?: any; facing?: string; ref?: any }> | null = null;
 
 if (Platform.OS !== "web") {
   try {
     const cam = require("expo-camera");
-    CameraView = cam.CameraView;
+    CameraViewComponent = cam.CameraView;
   } catch {
-    CameraView = null;
+    CameraViewComponent = null;
   }
 }
 
-export function CameraScanner() {
-  if (Platform.OS === "web" || !CameraView) {
+export const CameraScanner = forwardRef<any, {}>((_, ref) => {
+  if (Platform.OS === "web" || !CameraViewComponent) {
     return <View style={[StyleSheet.absoluteFill, styles.webBg]} />;
   }
 
-  return <CameraView style={StyleSheet.absoluteFill} facing="back" />;
-}
+  return <CameraViewComponent ref={ref} style={StyleSheet.absoluteFill} facing="back" />;
+});
+
+CameraScanner.displayName = "CameraScanner";
 
 let useCameraPermissionsImpl: () => [any, () => Promise<any>];
 
