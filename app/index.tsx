@@ -153,9 +153,14 @@ export default function ScannerScreen() {
   const frameRef = useRef<View>(null);
   const isScanningRef = useRef(false);
   const isDetectingRef = useRef(false);
+  // Cache the last detect photo so handleScan can reuse it — avoids a second takePictureAsync
+  const lastDetectRef = useRef<{
+    uri: string;
+    framePos: { x: number; y: number; width: number; height: number };
+    ts: number;
+  } | null>(null);
 
-  // Lightweight detect poll: takes a low-quality frame every 3s and checks
-  // if the server can find the 4 registration marks in the cropped image.
+  // Lightweight detect poll: takes a frame every 2s and checks for registration marks.
   const runDetect = useCallback(async () => {
     if (isScanningRef.current || isDetectingRef.current || !cameraRef.current || !frameRef.current) return;
     isDetectingRef.current = true;
@@ -173,6 +178,8 @@ export default function ScannerScreen() {
           );
         }
       );
+      // Store photo for reuse — handleScan can skip takePictureAsync if this is fresh
+      lastDetectRef.current = { uri: photo.uri, framePos, ts: Date.now() };
       const b64 = await cropToFrame(photo.uri, framePos, 400, 0.4);
       if (!b64) { setSheetDetected(false); return; }
       const resp = await fetch(`${getApiBase()}/api/detect`, {
@@ -200,7 +207,7 @@ export default function ScannerScreen() {
       setScanError(null);
       setSheetDetected(false);
       runDetect();
-      const detectInterval = setInterval(runDetect, 3000);
+      const detectInterval = setInterval(runDetect, 2000);
       return () => {
         clearInterval(detectInterval);
         setSheetDetected(false);
@@ -271,25 +278,31 @@ export default function ScannerScreen() {
     try {
       if (!cameraRef.current) throw new Error("Camera not ready");
 
-      // Measure the frame position on screen BEFORE taking the photo
-      const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
-        (resolve, reject) => {
-          if (!frameRef.current) return reject(new Error("frame ref not ready"));
-          (frameRef.current as any).measureInWindow(
-            (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
-          );
-        }
-      );
-
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.9,
-        base64: false,
-        skipProcessing: false,
-      });
-
-      // Crop to frame area + orient to portrait — gives server a clean sheet image
-      const base64 = await cropToFrame(photo.uri, framePos, 800, 0.9);
-      if (!base64) throw new Error("Image capture failed");
+      // Reuse the last detect photo if it's fresh (< 4s) — saves ~1s takePictureAsync call.
+      // The detect photo is full native resolution; we just re-crop at higher output quality.
+      const recent = lastDetectRef.current;
+      let base64: string | null = null;
+      if (recent && Date.now() - recent.ts < 4000) {
+        base64 = await cropToFrame(recent.uri, recent.framePos, 800, 0.9);
+      }
+      if (!base64) {
+        // Fresh photo fallback (manual tap or detect photo expired)
+        const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
+          (resolve, reject) => {
+            if (!frameRef.current) return reject(new Error("frame ref not ready"));
+            (frameRef.current as any).measureInWindow(
+              (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
+            );
+          }
+        );
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.9,
+          base64: false,
+          skipProcessing: false,
+        });
+        base64 = await cropToFrame(photo.uri, framePos, 800, 0.9);
+        if (!base64) throw new Error("Image capture failed");
+      }
 
       // Server detects registration marks in the (now clean, pre-cropped) image
       const resp = await fetch(`${getApiBase()}/api/scan`, {
@@ -329,7 +342,7 @@ export default function ScannerScreen() {
   // automatically. Timer is cleared if the sheet moves out of frame before firing.
   useEffect(() => {
     if (!sheetDetected || isScanningRef.current) return;
-    const timer = setTimeout(handleScan, 700);
+    const timer = setTimeout(handleScan, 200);
     return () => clearTimeout(timer);
   }, [sheetDetected, handleScan]);
 
