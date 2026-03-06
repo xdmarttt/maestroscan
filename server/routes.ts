@@ -1,5 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "node:http";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 
 const PYTHON_URL = "http://localhost:5002";
@@ -55,6 +57,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (err) {
       console.error("/api/debug-scan error:", err);
       res.json({ found: false });
+    }
+  });
+
+  // Debug: receive warped image from offline scanner and save to disk for inspection
+  // TODO: remove this endpoint when offline scanning is stable
+  app.post("/api/debug-save-warped", async (req, res) => {
+    try {
+      const { imageBase64 } = req.body;
+      if (!imageBase64 || typeof imageBase64 !== "string") {
+        return res.status(400).json({ ok: false });
+      }
+      const buf = Buffer.from(imageBase64, "base64");
+      const outPath = join(__dirname, "../../python/debug_last_scan_offline.jpg");
+      writeFileSync(outPath, buf);
+      console.log("[debug-save-warped] saved →", outPath);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("/api/debug-save-warped error:", err);
+      res.json({ ok: false });
     }
   });
 

@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   ScrollView,
   Pressable,
@@ -178,6 +179,7 @@ export default function ResultsScreen() {
 
   const answers: string[] = JSON.parse((params.answers as string) || "[]");
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
+  const debugImage = params.debugImage as string | undefined;
 
   const score = answers.filter((a, i) => a === questions[i]?.correct).length;
   const percentage = Math.round((score / questions.length) * 100);
@@ -209,6 +211,54 @@ export default function ResultsScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPad + 24 }]}
         showsVerticalScrollIndicator={false}
       >
+        {debugImage && (
+          <Animated.View entering={FadeInDown.duration(400)} style={styles.debugImageWrap}>
+            <Text style={styles.debugImageLabel}>DEBUG: Captured Image</Text>
+            <View style={styles.debugImageContainer}>
+              <Image
+                source={{ uri: `data:image/jpeg;base64,${debugImage}` }}
+                style={styles.debugImage}
+                resizeMode="contain"
+              />
+              {/* Bubble grid overlay — green = detected answer, red = other options */}
+              {[0.22, 0.35, 0.48, 0.61, 0.74].map((ny, row) =>
+                [0.25, 0.4, 0.55, 0.7].map((nx, col) => {
+                  const letter = ["A", "B", "C", "D"][col];
+                  const isDetected = answers[row] === letter;
+                  return (
+                    <View
+                      key={`${row}-${col}`}
+                      style={[
+                        styles.bubbleCircle,
+                        {
+                          left: `${nx * 100}%`,
+                          top: `${ny * 100}%`,
+                          borderColor: isDetected ? "#00e676" : "#ff1744",
+                          backgroundColor: isDetected ? "rgba(0,230,118,0.25)" : "transparent",
+                        },
+                      ]}
+                    >
+                      <Text style={[
+                        styles.bubbleLabel,
+                        { color: isDetected ? "#00e676" : "#ff1744" },
+                      ]}>{letter}</Text>
+                    </View>
+                  );
+                })
+              )}
+              {/* Registration mark indicators — corners */}
+              {[
+                { top: "6.2%", left: "6.1%" },
+                { top: "6.2%", left: "93.9%" },
+                { top: "93.8%", left: "6.1%" },
+                { top: "93.8%", left: "93.9%" },
+              ].map((pos, i) => (
+                <View key={`mark-${i}`} style={[styles.markIndicator, pos]} />
+              ))}
+            </View>
+          </Animated.View>
+        )}
+
         <Animated.View entering={FadeInDown.duration(400).delay(100)} style={styles.scoreSection}>
           <View style={styles.scoreSectionTop}>
             <View>
@@ -554,5 +604,56 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Inter_700Bold",
     color: Colors.background,
+  },
+  debugImageWrap: {
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    padding: 12,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: Colors.warning,
+  },
+  debugImageLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.warning,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  debugImageContainer: {
+    position: "relative",
+    width: "100%",
+    aspectRatio: 800 / 1125,
+  },
+  debugImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 8,
+    backgroundColor: Colors.surfaceElevated,
+  },
+  bubbleCircle: {
+    position: "absolute",
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    marginLeft: -14,
+    marginTop: -14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bubbleLabel: {
+    fontSize: 9,
+    fontFamily: "Inter_700Bold",
+  },
+  markIndicator: {
+    position: "absolute",
+    width: 12,
+    height: 12,
+    borderRadius: 2,
+    borderWidth: 2,
+    borderColor: "#ffab00",
+    marginLeft: -6,
+    marginTop: -6,
   },
 });

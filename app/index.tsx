@@ -28,6 +28,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, QuizQuestion } from "@/lib/quiz-storage";
+import { detectSheet, scanSheet } from "@/lib/scan-offline";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // Portrait frame matching the 320×450 answer sheet ratio (height = width × 1.40625)
@@ -126,20 +127,6 @@ function CornerBracket({
   );
 }
 
-function getApiBase(): string {
-  const domain = process.env.EXPO_PUBLIC_DOMAIN;
-  if (domain) {
-    const isLocal =
-      domain.startsWith("localhost") ||
-      domain.startsWith("127.") ||
-      domain.startsWith("192.168.") ||
-      domain.startsWith("10.") ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(domain);
-    const protocol = isLocal ? "http" : "https";
-    return `${protocol}://${domain}`;
-  }
-  return "http://localhost:5001";
-}
 
 export default function ScannerScreen() {
   const insets = useSafeAreaInsets();
@@ -182,15 +169,8 @@ export default function ScannerScreen() {
       lastDetectRef.current = { uri: photo.uri, framePos, ts: Date.now() };
       const b64 = await cropToFrame(photo.uri, framePos, 400, 0.4);
       if (!b64) { setSheetDetected(false); return; }
-      const resp = await fetch(`${getApiBase()}/api/detect`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: b64 }),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        setSheetDetected(!!data.found);
-      }
+      const data = await detectSheet(b64);
+      setSheetDetected(!!data.found);
     } catch {
       // silent — detection errors don't block scanning
     } finally {
@@ -304,16 +284,10 @@ export default function ScannerScreen() {
         if (!base64) throw new Error("Image capture failed");
       }
 
-      // Server detects registration marks in the (now clean, pre-cropped) image
-      const resp = await fetch(`${getApiBase()}/api/scan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: base64, questions }),
-      });
-      if (!resp.ok) throw new Error("Server error");
-      const data = await resp.json();
-      if (data.error || !data.answers) {
-        throw new Error(data.error ?? "Fit the sheet inside the frame and try again");
+      // On-device OpenCV processing — no server required
+      const data = await scanSheet(base64, questions);
+      if (!data.answers) {
+        throw new Error("Fit the sheet inside the frame and try again");
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -325,6 +299,7 @@ export default function ScannerScreen() {
         params: {
           answers: JSON.stringify(data.answers),
           questions: JSON.stringify(questions),
+          debugImage: base64,
         },
       });
     } catch (err: any) {

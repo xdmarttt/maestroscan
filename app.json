@@ -15,14 +15,19 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.myapp",
+      "bundleIdentifier": "com.gradesnap.scanner",
       "infoPlist": {
-        "NSCameraUsageDescription": "GradeSnap needs camera access to scan answer sheets."
+        "NSCameraUsageDescription": "GradeSnap needs camera access to scan answer sheets.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.myapp",
-      "permissions": ["CAMERA"],
+      "package": "com.gradesnap.scanner",
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#0A1628",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -47,6 +52,15 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {
+        "origin": "https://replit.com/"
+      },
+      "eas": {
+        "projectId": "8c2587a0-cc5c-4976-b9ec-0e73dc6f6256"
+      }
+    },
+    "owner": "martsonic901"
   }
 }
