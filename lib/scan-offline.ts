@@ -12,6 +12,7 @@
 
 import PerspT from "perspective-transform";
 import type { QuizQuestion } from "./quiz-storage";
+import { computeGridLayout, WARP_W as GRID_WARP_W, WARP_H as GRID_WARP_H } from "./grid-layout";
 
 // Lazy-load native OpenCV — fails gracefully in Expo Go
 let OpenCV: any = null;
@@ -63,32 +64,16 @@ function getApiBase(): string {
 }
 
 // ── Constants (must match python/scan_service.py and app/sheet.tsx) ──────────
-const WARP_W = 800;
-const WARP_H = 1125;
-const GRID_ROWS = 5;
-const GRID_COLS = 4;
-const LETTERS = ["A", "B", "C", "D"];
-
-// Bubble grid: normalized column/row centers in warped space
-const BUBBLE_NX = [0.25, 0.4, 0.55, 0.7];
-const BUBBLE_NY = [0.22, 0.35, 0.48, 0.61, 0.74];
+const WARP_W = GRID_WARP_W;
+const WARP_H = GRID_WARP_H;
 
 // Registration mark ideal positions in warped space (TL, TR, BL, BR order)
-// Computed from sheet coords: mark_px / sheet_px * WARP_px
-// TL=(19.6/320*800, 28/450*1125) ≈ [49, 70]
 const IDEAL_CORNERS: [number, number][] = [
   [(19.6 / 320) * WARP_W, (28.0 / 450) * WARP_H], // TL ≈ [49, 70]
   [(300.4 / 320) * WARP_W, (28.0 / 450) * WARP_H], // TR ≈ [751, 70]
   [(19.6 / 320) * WARP_W, (422.0 / 450) * WARP_H], // BL ≈ [49, 1050]
   [(300.4 / 320) * WARP_W, (422.0 / 450) * WARP_H], // BR ≈ [751, 1050]
 ];
-
-// Bubble sampling radii in warped pixels (matches Python exactly)
-const INNER_R = 16; // inside the bubble interior
-const OUTER_R1 = 36; // inner edge of paper annulus
-const OUTER_R2 = 50; // outer edge of paper annulus
-const MIN_RATIO = 0.08; // fill ratio threshold
-const MIN_GAP = 0.04; // winner vs runner-up gap
 
 // ── Ring pixel helpers (pure JS — only cross-bridge once for pixel buffer) ───
 
@@ -404,13 +389,14 @@ export async function detectSheet(base64: string): Promise<{
  */
 export async function scanSheet(
   base64: string,
-  questions: QuizQuestion[]
+  questions: QuizQuestion[],
+  choiceCount: 4 | 5 = 4,
 ): Promise<{ answers: string[]; confidence: number[] }> {
   if (!isNativeAvailable()) {
     const resp = await fetch(`${getApiBase()}/api/scan`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ imageBase64: base64, questions }),
+      body: JSON.stringify({ imageBase64: base64, questions, choiceCount }),
     });
     if (!resp.ok) throw new Error("Server scan failed");
     return await resp.json();
@@ -472,17 +458,19 @@ export async function scanSheet(
   // 6. Histogram normalization (percentile stretch 2–98, same as Python)
   const warpedPixels = normalizePixels(rawPixels);
 
-  // 7. Sample 5×4 bubble grid
+  // 7. Sample bubble grid using dynamic layout
+  const layout = computeGridLayout(questions.length, choiceCount);
   const answers: string[] = [];
   const confidence: number[] = [];
 
-  for (let row = 0; row < GRID_ROWS; row++) {
+  for (let q = 0; q < layout.questionCount; q++) {
     const ratios: number[] = [];
-    for (let col = 0; col < GRID_COLS; col++) {
-      const cx = BUBBLE_NX[col] * wW;
-      const cy = BUBBLE_NY[row] * wH;
-      const inner = ringMean(warpedPixels, wW, wH, cx, cy, 0, INNER_R);
-      const outer = ringBright(warpedPixels, wW, wH, cx, cy, OUTER_R1, OUTER_R2);
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny } = layout.bubbleCenter(q, c);
+      const cx = nx * wW;
+      const cy = ny * wH;
+      const inner = ringMean(warpedPixels, wW, wH, cx, cy, 0, layout.innerR);
+      const outer = ringBright(warpedPixels, wW, wH, cx, cy, layout.outerR1, layout.outerR2);
       const ratio = (outer - inner) / Math.max(outer, 64);
       ratios.push(ratio);
     }
@@ -493,8 +481,8 @@ export async function scanSheet(
     const gap = best - second;
     const bestIdx = ratios.indexOf(best);
 
-    if (best >= MIN_RATIO && gap >= MIN_GAP) {
-      answers.push(LETTERS[bestIdx]);
+    if (best >= layout.minRatio && gap >= layout.minGap) {
+      answers.push(layout.letters[bestIdx]);
       confidence.push(Math.min(1, gap / 0.4));
     } else {
       answers.push("?");
@@ -512,7 +500,8 @@ export async function scanSheet(
  */
 export async function detectAndScan(
   base64: string,
-  questions: QuizQuestion[]
+  questions: QuizQuestion[],
+  choiceCount: 4 | 5 = 4,
 ): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[] }> {
   if (!isNativeAvailable()) {
     // Server fallback: detect first, then scan if found
@@ -528,7 +517,7 @@ export async function detectAndScan(
       const scanResp = await fetch(`${getApiBase()}/api/scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: base64, questions }),
+        body: JSON.stringify({ imageBase64: base64, questions, choiceCount }),
       });
       if (!scanResp.ok) return { found: false };
       const scanData = await scanResp.json();
@@ -580,15 +569,17 @@ export async function detectAndScan(
 
   const warpedPixels = normalizePixels(rawPixels);
 
+  const layout = computeGridLayout(questions.length, choiceCount);
   const answers: string[] = [];
   const confidence: number[] = [];
-  for (let row = 0; row < GRID_ROWS; row++) {
+  for (let q = 0; q < layout.questionCount; q++) {
     const ratios: number[] = [];
-    for (let col = 0; col < GRID_COLS; col++) {
-      const cx = BUBBLE_NX[col] * wW;
-      const cy = BUBBLE_NY[row] * wH;
-      const inner = ringMean(warpedPixels, wW, wH, cx, cy, 0, INNER_R);
-      const outer = ringBright(warpedPixels, wW, wH, cx, cy, OUTER_R1, OUTER_R2);
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny } = layout.bubbleCenter(q, c);
+      const cx = nx * wW;
+      const cy = ny * wH;
+      const inner = ringMean(warpedPixels, wW, wH, cx, cy, 0, layout.innerR);
+      const outer = ringBright(warpedPixels, wW, wH, cx, cy, layout.outerR1, layout.outerR2);
       ratios.push((outer - inner) / Math.max(outer, 64));
     }
     const sorted = [...ratios].sort((a, b) => b - a);
@@ -596,8 +587,8 @@ export async function detectAndScan(
     const second = sorted[1] ?? 0;
     const gap = best - second;
     const bestIdx = ratios.indexOf(best);
-    if (best >= MIN_RATIO && gap >= MIN_GAP) {
-      answers.push(LETTERS[bestIdx]);
+    if (best >= layout.minRatio && gap >= layout.minGap) {
+      answers.push(layout.letters[bestIdx]);
       confidence.push(Math.min(1, gap / 0.4));
     } else {
       answers.push("?");

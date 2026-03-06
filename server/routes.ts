@@ -18,13 +18,14 @@ async function proxyToPython(path: string, body: unknown) {
 const QuizQuestionSchema = z.object({
   id: z.number(),
   text: z.string(),
-  choices: z.array(z.string()).length(4),
-  correct: z.enum(["A", "B", "C", "D"]),
+  choices: z.array(z.string()).min(4).max(5),
+  correct: z.enum(["A", "B", "C", "D", "E"]),
 });
 
 const ScanRequestSchema = z.object({
   imageBase64: z.string().min(100),
-  questions: z.array(QuizQuestionSchema).length(5),
+  questions: z.array(QuizQuestionSchema).min(1).max(100),
+  choiceCount: z.union([z.literal(4), z.literal(5)]).optional().default(4),
   // [[x,y],[x,y],[x,y],[x,y]] TL,TR,BL,BR — sent by app when using manual alignment
   corners: z.array(z.tuple([z.number(), z.number()])).length(4).optional(),
 });

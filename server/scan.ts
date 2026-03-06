@@ -1,21 +1,9 @@
 import sharp from "sharp";
 // @ts-ignore — no type definitions for this package
 import PerspT from "perspective-transform";
-
-// Answer sheet dimensions (must match app/sheet.tsx)
-const SHEET_W = 320;
-const SHEET_H = 450;
-
-// Warped output space (larger for better sampling precision)
-const WARP_W = 800;
-const WARP_H = 1125; // preserves 320:450 aspect ratio
+import { computeGridLayout, SHEET_W, SHEET_H, WARP_W, WARP_H } from "../lib/grid-layout";
 
 // Registration mark corners in NORMALIZED sheet coordinates (0–1)
-// Each mark is a 20×20 solid black square.
-// TL: left=9.6, top=18 → center at (19.6, 28) on 320×450 sheet
-// TR: right=9.6, top=18 → center at (300.4, 28)
-// BL: left=9.6, bottom=18 → center at (19.6, 422)
-// BR: right=9.6, bottom=18 → center at (300.4, 422)
 const REG_NORM = {
   TL: [19.6 / SHEET_W, 28 / SHEET_H] as [number, number],
   TR: [300.4 / SHEET_W, 28 / SHEET_H] as [number, number],
@@ -23,17 +11,6 @@ const REG_NORM = {
   BR: [300.4 / SHEET_W, 422 / SHEET_H] as [number, number],
 };
 
-// Bubble grid in normalized coordinates (must match app/sheet.tsx)
-// Columns A(0) B(1) C(2) D(3): nx = 0.25 + col * 0.15
-// Rows 0–4:                     ny = 0.22 + row * 0.13
-const GRID_COLS = 4;
-const GRID_ROWS = 5;
-
-function bubbleNorm(row: number, col: number): [number, number] {
-  return [0.25 + col * 0.15, 0.22 + row * 0.13];
-}
-
-const LETTERS = ["A", "B", "C", "D"] as const;
 const SAMPLE_RADIUS = 18; // px in warped space
 const FILL_THRESHOLD = 128; // brightness below this = filled bubble
 
@@ -137,7 +114,9 @@ export async function detectSheet(imageBase64: string): Promise<DetectResult> {
 }
 
 export async function processAnswerSheet(
-  imageBase64: string
+  imageBase64: string,
+  questionCount: number = 5,
+  choiceCount: 4 | 5 = 4,
 ): Promise<ScanResult> {
   // 1. Load image as grayscale with contrast stretch
   // .rotate() auto-corrects EXIF orientation (iPhone portrait photos are stored sideways)
@@ -178,22 +157,22 @@ export async function processAnswerSheet(
 
   const perspT = PerspT(srcPts, dstPts);
 
-  // 4. Sample each bubble
+  // 4. Sample each bubble using dynamic layout
+  const layout = computeGridLayout(questionCount, choiceCount);
   const bubbleBrightness: number[][] = [];
   const answers: string[] = [];
   const confidence: number[] = [];
 
-  for (let row = 0; row < GRID_ROWS; row++) {
-    bubbleBrightness[row] = [];
+  for (let q = 0; q < layout.questionCount; q++) {
+    bubbleBrightness[q] = [];
 
-    for (let col = 0; col < GRID_COLS; col++) {
-      const [nx, ny] = bubbleNorm(row, col);
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny } = layout.bubbleCenter(q, c);
       const wx = nx * WARP_W;
       const wy = ny * WARP_H;
 
-      // Map warped coords to photo coords (src=warped, dst=photo → .transform goes warped→photo)
       const [sx, sy] = perspT.transform(wx, wy);
-      bubbleBrightness[row][col] = sampleCircle(
+      bubbleBrightness[q][c] = sampleCircle(
         pixels as unknown as Uint8Array,
         W,
         H,
@@ -203,15 +182,14 @@ export async function processAnswerSheet(
       );
     }
 
-    // Pick the darkest bubble in this row
-    const row_b = bubbleBrightness[row];
+    const row_b = bubbleBrightness[q];
     const sorted = [...row_b].sort((a, b) => a - b);
     const minBrightness = sorted[0];
     const secondMin = sorted[1] ?? 255;
     const minIdx = row_b.indexOf(minBrightness);
 
     if (minBrightness < FILL_THRESHOLD) {
-      answers.push(LETTERS[minIdx]);
+      answers.push(layout.letters[minIdx]);
       confidence.push(Math.min(1, (secondMin - minBrightness) / 80));
     } else {
       answers.push("?");

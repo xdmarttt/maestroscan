@@ -38,10 +38,73 @@ REG_NORM = {
     "CR": (300.4 / SHEET_W, 225.0 / SHEET_H),   # center-right
 }
 
-GRID_ROWS, GRID_COLS = 5, 4
-LETTERS = ["A", "B", "C", "D"]
 SAMPLE_RADIUS = 22         # px in warped space (bubble interior radius ≈ 27px)
 MIN_FILL_GAP = 15          # filled bubble must be ≥ this darker than 2nd darkest in row
+
+
+# ── Dynamic grid layout (must match lib/grid-layout.ts) ──────────────────────
+
+def compute_grid_layout(question_count: int, choice_count: int = 4):
+    """Replicate lib/grid-layout.ts computeGridLayout() in Python."""
+    if question_count <= 10:
+        question_columns = 1
+    elif question_count <= 25:
+        question_columns = 2
+    elif question_count <= 50:
+        question_columns = 3
+    elif question_count <= 75:
+        question_columns = 4
+    else:
+        question_columns = 5
+
+    import math
+    questions_per_column = math.ceil(question_count / question_columns)
+    letters = ["A", "B", "C", "D", "E"][:choice_count]
+
+    AREA_X0, AREA_X1 = 0.10, 0.90
+    AREA_Y0, AREA_Y1 = 0.15, 0.88
+    COL_GAP_NORM = 0.02
+    LABEL_WIDTH_NORM = 0.04
+
+    area_w = AREA_X1 - AREA_X0
+    area_h = AREA_Y1 - AREA_Y0
+
+    col_width = (area_w - COL_GAP_NORM * (question_columns - 1)) / question_columns
+    bubble_spacing_h = (col_width - LABEL_WIDTH_NORM) / choice_count
+    bubble_spacing_v = area_h / questions_per_column
+
+    MIN_BUBBLE_NORM = 10 / WARP_W
+    bubble_diameter_norm = max(MIN_BUBBLE_NORM, min(bubble_spacing_h, bubble_spacing_v) * 0.72)
+
+    REF_BUBBLE_WARPED = 55
+    REF_INNER_R, REF_OUTER_R1, REF_OUTER_R2 = 16, 36, 50
+    actual_bubble_warped = bubble_diameter_norm * WARP_W
+    scale = actual_bubble_warped / REF_BUBBLE_WARPED
+    inner_r = max(4, round(REF_INNER_R * scale))
+    outer_r1 = max(8, round(REF_OUTER_R1 * scale))
+    outer_r2 = max(12, round(REF_OUTER_R2 * scale))
+
+    def bubble_center(q: int, c: int):
+        q_col = q // questions_per_column
+        q_row = q % questions_per_column
+        col_start_x = AREA_X0 + q_col * (col_width + COL_GAP_NORM)
+        nx = col_start_x + LABEL_WIDTH_NORM + (c + 0.5) * bubble_spacing_h
+        ny = AREA_Y0 + (q_row + 0.5) * bubble_spacing_v
+        return nx, ny
+
+    return {
+        "question_count": question_count,
+        "choice_count": choice_count,
+        "letters": letters,
+        "question_columns": question_columns,
+        "questions_per_column": questions_per_column,
+        "bubble_center": bubble_center,
+        "inner_r": inner_r,
+        "outer_r1": outer_r1,
+        "outer_r2": outer_r2,
+        "min_ratio": 0.08,
+        "min_gap": 0.04,
+    }
 
 # ── FastAPI setup ──────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -57,6 +120,7 @@ class DetectRequest(BaseModel):
 class ScanRequest(BaseModel):
     imageBase64: str
     questions: list
+    choiceCount: int = 4
     # [[x,y],[x,y],[x,y],[x,y]] TL,TR,BL,BR in pixels of the resized image.
     # When provided, perspective warp uses these corners directly — no mark detection.
     corners: Optional[list] = None
@@ -386,14 +450,16 @@ async def debug_scan(req: DetectRequest):
         M = _solve_homography(src_pts, dst_pts)
         warped = cv2.warpPerspective(gray, M, (WARP_W, WARP_H))
 
-        # Draw bubble target circles for visual verification
+        # Draw bubble target circles for visual verification (default 5q/4c)
+        layout = compute_grid_layout(5, 4)
         vis = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
-        for row in range(GRID_ROWS):
-            for col in range(GRID_COLS):
-                cx = int((0.25 + col * 0.15) * WARP_W)
-                cy = int((0.22 + row * 0.13) * WARP_H)
+        for q in range(layout["question_count"]):
+            for c in range(layout["choice_count"]):
+                nx, ny = layout["bubble_center"](q, c)
+                cx = int(nx * WARP_W)
+                cy = int(ny * WARP_H)
                 cv2.circle(vis, (cx, cy), SAMPLE_RADIUS, (0, 0, 255), 2)
-                cv2.putText(vis, LETTERS[col], (cx - 8, cy + 5),
+                cv2.putText(vis, layout["letters"][c], (cx - 8, cy + 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
         # Scale down for transfer (800×1125 is large)
@@ -500,27 +566,15 @@ async def scan(req: ScanRequest):
                 (warped.astype(np.float32) - lo) / (hi - lo) * 255, 0, 255
             ).astype(np.uint8)
 
-        # ── Bubble reading ─────────────────────────────────────────────────────────
-        # Normalised fill ratio: (outer_brightness - inner_brightness) / outer_brightness
-        #
-        #   ratio ≈ 0.00–0.06  → empty  (inner ≈ outer ≈ white paper)
-        #   ratio ≈ 0.10–0.90  → filled (dark pencil/ink inside, bright paper outside)
-        #
-        # outer uses the BRIGHTEST 80% of the annulus ring so that any dark
-        # element (shadow, text, crease) that falls in the ring is excluded.
-        #
-        # Radii in warped space (bubble radius ≈ 27.5px, border ≈ 4px thick):
-        #   INNER_R  = 16   — well inside interior (safe margin from 23.75px inner edge)
-        #   OUTER_R1 = 36   — starts 8px past bubble edge (clears JPEG border bleed)
-        #   OUTER_R2 = 50   — more outer-ring pixels → percentile more stable
-        INNER_R  = 16
-        OUTER_R1 = 36
-        OUTER_R2 = 50
-
-        # ratio must exceed this to count as filled
-        MIN_RATIO = 0.08
-        # winner must beat runner-up by this margin (prevents noise wins)
-        MIN_GAP   = 0.04
+        # ── Bubble reading using dynamic layout ─────────────────────────────────
+        question_count = len(req.questions)
+        choice_count = max(4, min(5, req.choiceCount))
+        layout = compute_grid_layout(question_count, choice_count)
+        INNER_R  = layout["inner_r"]
+        OUTER_R1 = layout["outer_r1"]
+        OUTER_R2 = layout["outer_r2"]
+        MIN_RATIO = layout["min_ratio"]
+        MIN_GAP   = layout["min_gap"]
 
         row_ratios: list[list[float]] = []
         row_inner: list[list[float]] = []
@@ -528,13 +582,12 @@ async def scan(req: ScanRequest):
         answers: list[str] = []
         confidence: list[float] = []
 
-        for row in range(GRID_ROWS):
+        for q in range(layout["question_count"]):
             ratios: list[float] = []
             inners: list[float] = []
             outers: list[float] = []
-            for col in range(GRID_COLS):
-                nx = 0.25 + col * 0.15
-                ny = 0.22 + row * 0.13
+            for c in range(layout["choice_count"]):
+                nx, ny = layout["bubble_center"](q, c)
                 cx, cy = nx * WARP_W, ny * WARP_H
                 icx, icy = int(round(cx)), int(round(cy))
                 inner = _ring_mean(warped, icx, icy, 0, INNER_R)
@@ -554,7 +607,7 @@ async def scan(req: ScanRequest):
             gap = best - second
 
             if best >= MIN_RATIO and gap >= MIN_GAP:
-                answers.append(LETTERS[best_idx])
+                answers.append(layout["letters"][best_idx])
                 confidence.append(min(gap / 0.4, 1.0))
             else:
                 answers.append("?")
@@ -573,23 +626,18 @@ async def scan(req: ScanRequest):
         # ── Save debug image ───────────────────────────────────────────────────
         try:
             vis = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGR)
-            for row in range(GRID_ROWS):
-                for col in range(GRID_COLS):
-                    nx = 0.25 + col * 0.15
-                    ny = 0.22 + row * 0.13
+            for q in range(layout["question_count"]):
+                for c in range(layout["choice_count"]):
+                    nx, ny = layout["bubble_center"](q, c)
                     cx = int(nx * WARP_W)
                     cy = int(ny * WARP_H)
-                    ratio = row_ratios[row][col]
-                    filled = answers[row] == LETTERS[col]
-                    color = (0, 255, 0) if filled else (0, 0, 255)  # green=picked, red=not
+                    ratio = row_ratios[q][c]
+                    filled = answers[q] == layout["letters"][c]
+                    color = (0, 255, 0) if filled else (0, 0, 255)
                     thickness = 3 if filled else 1
                     cv2.circle(vis, (cx, cy), INNER_R, color, thickness)
                     cv2.putText(vis, f"{ratio:.2f}", (cx - 14, cy + 5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
-                # Label answer on right side
-                cv2.putText(vis, answers[row],
-                            (int(WARP_W * 0.88), int((0.22 + row * 0.13) * WARP_H) + 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 128, 0), 2)
             # Draw registration mark positions
             for k in mark_keys:
                 mx2 = int(REG_NORM[k][0] * WARP_W)
@@ -602,7 +650,7 @@ async def scan(req: ScanRequest):
         except Exception:
             traceback.print_exc()
 
-        bubble_brightness = row_ratios  # higher ratio = more filled
+        bubble_brightness = row_ratios
 
         return {
             "answers": answers,

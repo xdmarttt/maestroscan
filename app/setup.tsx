@@ -18,18 +18,33 @@ import {
   loadQuiz,
   saveQuiz,
   QuizQuestion,
+  ChoiceLetter,
   DEFAULT_QUIZ,
 } from "@/lib/quiz-storage";
 
-const LETTERS = ["A", "B", "C", "D"] as const;
+const LETTERS_4 = ["A", "B", "C", "D"] as const;
+const LETTERS_5 = ["A", "B", "C", "D", "E"] as const;
 
+function makeQuestion(id: number, choiceCount: 4 | 5): QuizQuestion {
+  const letters = choiceCount === 5 ? LETTERS_5 : LETTERS_4;
+  return {
+    id,
+    text: "",
+    choices: letters.map((l) => `${l}. `),
+    correct: "A",
+  };
+}
+
+/** Full editor card for ≤10 questions */
 function QuestionEditor({
   question,
   index,
+  letters,
   onChange,
 }: {
   question: QuizQuestion;
   index: number;
+  letters: readonly string[];
   onChange: (q: QuizQuestion) => void;
 }) {
   return (
@@ -50,12 +65,12 @@ function QuestionEditor({
       />
       <Text style={styles.answerLabel}>Correct Answer</Text>
       <View style={styles.choiceRow}>
-        {LETTERS.map((letter) => (
+        {letters.map((letter) => (
           <Pressable
             key={letter}
             onPress={() => {
               Haptics.selectionAsync();
-              onChange({ ...question, correct: letter });
+              onChange({ ...question, correct: letter as ChoiceLetter });
             }}
             style={({ pressed }) => [
               styles.choiceBubble,
@@ -78,15 +93,89 @@ function QuestionEditor({
   );
 }
 
+/** Compact answer-key row for >10 questions (simple mode) */
+function SimpleRow({
+  question,
+  letters,
+  onChange,
+}: {
+  question: QuizQuestion;
+  letters: readonly string[];
+  onChange: (q: QuizQuestion) => void;
+}) {
+  return (
+    <View style={styles.simpleRow}>
+      <Text style={styles.simpleNum}>{question.id}.</Text>
+      {letters.map((letter) => (
+        <Pressable
+          key={letter}
+          onPress={() => {
+            Haptics.selectionAsync();
+            onChange({ ...question, correct: letter as ChoiceLetter });
+          }}
+          style={({ pressed }) => [
+            styles.simpleBubble,
+            question.correct === letter && styles.simpleBubbleSelected,
+            pressed && { opacity: 0.75 },
+          ]}
+        >
+          <Text
+            style={[
+              styles.simpleLetter,
+              question.correct === letter && styles.simpleLetterSelected,
+            ]}
+          >
+            {letter}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
 export default function SetupScreen() {
   const insets = useSafeAreaInsets();
-  const [questions, setQuestions] = useState<QuizQuestion[]>(
-    DEFAULT_QUIZ.questions
-  );
+  const [questions, setQuestions] = useState<QuizQuestion[]>(DEFAULT_QUIZ.questions);
+  const [choiceCount, setChoiceCount] = useState<4 | 5>(DEFAULT_QUIZ.choiceCount);
+  const [loaded, setLoaded] = useState(false);
+
+  const letters = choiceCount === 5 ? LETTERS_5 : LETTERS_4;
+  const questionCount = questions.length;
+  const simpleMode = questionCount > 10;
 
   useEffect(() => {
-    loadQuiz().then((config) => setQuestions(config.questions));
+    loadQuiz().then((config) => {
+      setQuestions(config.questions);
+      setChoiceCount(config.choiceCount);
+      setLoaded(true);
+    });
   }, []);
+
+  const setQuestionCount = (count: number) => {
+    const clamped = Math.max(1, Math.min(100, count));
+    setQuestions((prev) => {
+      if (clamped === prev.length) return prev;
+      if (clamped < prev.length) return prev.slice(0, clamped);
+      const added = Array.from({ length: clamped - prev.length }, (_, i) =>
+        makeQuestion(prev.length + i + 1, choiceCount)
+      );
+      return [...prev, ...added];
+    });
+  };
+
+  const handleChoiceToggle = () => {
+    const next: 4 | 5 = choiceCount === 4 ? 5 : 4;
+    Haptics.selectionAsync();
+    setChoiceCount(next);
+    const nextLetters = next === 5 ? LETTERS_5 : LETTERS_4;
+    setQuestions((prev) =>
+      prev.map((q) => ({
+        ...q,
+        choices: nextLetters.map((l) => `${l}. `),
+        correct: q.correct === "E" && next === 4 ? "A" : q.correct,
+      }))
+    );
+  };
 
   const updateQuestion = (index: number, updated: QuizQuestion) => {
     setQuestions((prev) => {
@@ -98,13 +187,16 @@ export default function SetupScreen() {
 
   const handleSave = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await saveQuiz({ questions, createdAt: Date.now() });
+    await saveQuiz({ questions, choiceCount, createdAt: Date.now() });
     router.back();
   };
 
   const handleViewSheet = async () => {
-    await saveQuiz({ questions, createdAt: Date.now() });
-    router.push({ pathname: "/sheet", params: { questions: JSON.stringify(questions) } });
+    await saveQuiz({ questions, choiceCount, createdAt: Date.now() });
+    router.push({
+      pathname: "/sheet",
+      params: { questions: JSON.stringify(questions), choiceCount: String(choiceCount) },
+    });
   };
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
@@ -130,8 +222,56 @@ export default function SetupScreen() {
         </Pressable>
       </View>
 
+      {/* Config bar: question count + choice count */}
+      <View style={styles.configBar}>
+        {/* Question count stepper */}
+        <View style={styles.configItem}>
+          <Text style={styles.configLabel}>Questions</Text>
+          <View style={styles.stepper}>
+            <Pressable
+              onPress={() => { Haptics.selectionAsync(); setQuestionCount(questionCount - 1); }}
+              style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }]}
+            >
+              <Ionicons name="remove" size={18} color={Colors.textPrimary} />
+            </Pressable>
+            <TextInput
+              style={styles.stepValue}
+              value={String(questionCount)}
+              onChangeText={(t) => {
+                const n = parseInt(t, 10);
+                if (!isNaN(n)) setQuestionCount(n);
+              }}
+              keyboardType="number-pad"
+              selectTextOnFocus
+              maxLength={3}
+            />
+            <Pressable
+              onPress={() => { Haptics.selectionAsync(); setQuestionCount(questionCount + 1); }}
+              style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }]}
+            >
+              <Ionicons name="add" size={18} color={Colors.textPrimary} />
+            </Pressable>
+          </View>
+        </View>
+
+        {/* Choice count toggle */}
+        <View style={styles.configItem}>
+          <Text style={styles.configLabel}>Choices</Text>
+          <Pressable
+            onPress={handleChoiceToggle}
+            style={({ pressed }) => [styles.choiceToggle, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.choiceToggleText}>
+              A–{choiceCount === 4 ? "D" : "E"}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+
       <Text style={styles.subtitle}>
-        Set 5 questions and mark the correct answer for each.
+        {simpleMode
+          ? `Set the answer key for ${questionCount} questions.`
+          : `Set ${questionCount} question${questionCount > 1 ? "s" : ""} and mark the correct answer.`}
       </Text>
 
       <ScrollView
@@ -139,14 +279,24 @@ export default function SetupScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPad + 100 }]}
         keyboardShouldPersistTaps="handled"
       >
-        {questions.map((q, i) => (
-          <QuestionEditor
-            key={q.id}
-            question={q}
-            index={i}
-            onChange={(updated) => updateQuestion(i, updated)}
-          />
-        ))}
+        {simpleMode
+          ? questions.map((q, i) => (
+              <SimpleRow
+                key={q.id}
+                question={q}
+                letters={letters}
+                onChange={(updated) => updateQuestion(i, updated)}
+              />
+            ))
+          : questions.map((q, i) => (
+              <QuestionEditor
+                key={q.id}
+                question={q}
+                index={i}
+                letters={letters}
+                onChange={(updated) => updateQuestion(i, updated)}
+              />
+            ))}
       </ScrollView>
 
       {/* Save button */}
@@ -198,6 +348,56 @@ const styles = StyleSheet.create({
   sheetBtnText: {
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
+    color: Colors.accent,
+  },
+  configBar: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 16,
+    alignItems: "center",
+  },
+  configItem: {
+    gap: 4,
+  },
+  configLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  stepper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  stepBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  stepValue: {
+    minWidth: 40,
+    textAlign: "center",
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    color: Colors.textPrimary,
+    paddingVertical: 6,
+  },
+  choiceToggle: {
+    backgroundColor: Colors.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  choiceToggleText: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
     color: Colors.accent,
   },
   subtitle: {
@@ -269,6 +469,43 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
   },
   choiceLetterSelected: {
+    color: Colors.accent,
+  },
+  // Simple mode (>10 questions)
+  simpleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 4,
+  },
+  simpleNum: {
+    width: 32,
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.textSecondary,
+    textAlign: "right",
+    marginRight: 4,
+  },
+  simpleBubble: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceElevated,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  simpleBubbleSelected: {
+    borderColor: Colors.accent,
+    backgroundColor: Colors.accentDim,
+  },
+  simpleLetter: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: Colors.textMuted,
+  },
+  simpleLetterSelected: {
     color: Colors.accent,
   },
   footer: {

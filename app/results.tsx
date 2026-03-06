@@ -25,6 +25,7 @@ import Animated, {
 import * as Haptics from "expo-haptics";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
+import { computeGridLayout } from "@/lib/grid-layout";
 
 interface Question {
   id: number;
@@ -179,7 +180,9 @@ export default function ResultsScreen() {
 
   const answers: string[] = JSON.parse((params.answers as string) || "[]");
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
+  const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
   const debugImage = params.debugImage as string | undefined;
+  const layout = computeGridLayout(questions.length, choiceCount);
 
   const score = answers.filter((a, i) => a === questions[i]?.correct).length;
   const percentage = Math.round((score / questions.length) * 100);
@@ -221,13 +224,13 @@ export default function ResultsScreen() {
                 resizeMode="contain"
               />
               {/* Bubble grid overlay — green = detected answer, red = other options */}
-              {[0.22, 0.35, 0.48, 0.61, 0.74].map((ny, row) =>
-                [0.25, 0.4, 0.55, 0.7].map((nx, col) => {
-                  const letter = ["A", "B", "C", "D"][col];
-                  const isDetected = answers[row] === letter;
+              {Array.from({ length: layout.questionCount }).map((_, q) =>
+                layout.letters.map((letter, c) => {
+                  const { nx, ny } = layout.bubbleCenter(q, c);
+                  const isDetected = answers[q] === letter;
                   return (
                     <View
-                      key={`${row}-${col}`}
+                      key={`${q}-${c}`}
                       style={[
                         styles.bubbleCircle,
                         {
@@ -248,10 +251,10 @@ export default function ResultsScreen() {
               )}
               {/* Registration mark indicators — corners */}
               {[
-                { top: "6.2%", left: "6.1%" },
-                { top: "6.2%", left: "93.9%" },
-                { top: "93.8%", left: "6.1%" },
-                { top: "93.8%", left: "93.9%" },
+                { top: "6.2%" as const, left: "6.1%" as const },
+                { top: "6.2%" as const, left: "93.9%" as const },
+                { top: "93.8%" as const, left: "6.1%" as const },
+                { top: "93.8%" as const, left: "93.9%" as const },
               ].map((pos, i) => (
                 <View key={`mark-${i}`} style={[styles.markIndicator, pos]} />
               ))}

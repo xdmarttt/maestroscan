@@ -104,6 +104,7 @@ export default function ScannerScreen() {
   const [scanDone, setScanDone] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
+  const [choiceCount, setChoiceCount] = useState<4 | 5>(4);
   const [sheetDetected, setSheetDetected] = useState(false);
   const cameraRef = useRef<any>(null);
   const frameRef = useRef<View>(null);
@@ -133,7 +134,7 @@ export default function ScannerScreen() {
       const b64 = await cropToFrame(photo.uri, framePos, 640, 0.5);
       if (!b64) { setSheetDetected(false); return; }
 
-      const result = await detectAndScan(b64, questions);
+      const result = await detectAndScan(b64, questions, choiceCount);
       if (!result.found) { setSheetDetected(false); return; }
 
       // Sheet found and scanned in one pass — navigate immediately
@@ -149,6 +150,7 @@ export default function ScannerScreen() {
         params: {
           answers: JSON.stringify(result.answers),
           questions: JSON.stringify(questions),
+          choiceCount: String(choiceCount),
           debugImage: b64,
         },
       });
@@ -157,7 +159,7 @@ export default function ScannerScreen() {
     } finally {
       isDetectingRef.current = false;
     }
-  }, [questions]);
+  }, [questions, choiceCount]);
 
   // Reset scan state and start live detection every time this screen is focused
   useFocusEffect(
@@ -181,7 +183,10 @@ export default function ScannerScreen() {
   const pulseScale = useSharedValue(1);
 
   useEffect(() => {
-    loadQuiz().then((config) => setQuestions(config.questions));
+    loadQuiz().then((config) => {
+      setQuestions(config.questions);
+      setChoiceCount(config.choiceCount);
+    });
   }, []);
 
   useEffect(() => {
@@ -256,7 +261,7 @@ export default function ScannerScreen() {
       const base64 = await cropToFrame(photo.uri, framePos, 800, 0.8);
       if (!base64) throw new Error("Image capture failed");
 
-      const data = await scanSheet(base64, questions);
+      const data = await scanSheet(base64, questions, choiceCount);
       if (!data.answers) {
         throw new Error("Fit the sheet inside the frame and try again");
       }
@@ -270,6 +275,7 @@ export default function ScannerScreen() {
         params: {
           answers: JSON.stringify(data.answers),
           questions: JSON.stringify(questions),
+          choiceCount: String(choiceCount),
           debugImage: base64,
         },
       });
@@ -282,7 +288,7 @@ export default function ScannerScreen() {
       setIsScanning(false);
       setScanDone(false);
     }
-  }, [questions]);
+  }, [questions, choiceCount]);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
@@ -343,7 +349,7 @@ export default function ScannerScreen() {
               onPress={() =>
                 router.push({
                   pathname: "/sheet",
-                  params: { questions: JSON.stringify(questions) },
+                  params: { questions: JSON.stringify(questions), choiceCount: String(choiceCount) },
                 })
               }
               style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}

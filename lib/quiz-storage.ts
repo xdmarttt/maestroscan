@@ -1,20 +1,24 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+export type ChoiceLetter = "A" | "B" | "C" | "D" | "E";
+
 export interface QuizQuestion {
   id: number;
   text: string;
-  choices: string[]; // ["A. ...", "B. ...", "C. ...", "D. ..."]
-  correct: "A" | "B" | "C" | "D";
+  choices: string[]; // ["A. ...", "B. ...", "C. ...", "D. ..."] or 5 choices
+  correct: ChoiceLetter;
 }
 
 export interface QuizConfig {
   questions: QuizQuestion[];
+  choiceCount: 4 | 5;
   createdAt: number;
 }
 
 const QUIZ_KEY = "gradesnap:quiz_config";
 
 export const DEFAULT_QUIZ: QuizConfig = {
+  choiceCount: 4,
   questions: [
     {
       id: 1,
@@ -54,7 +58,10 @@ export async function loadQuiz(): Promise<QuizConfig> {
   try {
     const raw = await AsyncStorage.getItem(QUIZ_KEY);
     if (!raw) return DEFAULT_QUIZ;
-    return JSON.parse(raw) as QuizConfig;
+    const parsed = JSON.parse(raw) as QuizConfig;
+    // Migration: old configs lack choiceCount
+    if (!parsed.choiceCount) parsed.choiceCount = 4;
+    return parsed;
   } catch {
     return DEFAULT_QUIZ;
   }

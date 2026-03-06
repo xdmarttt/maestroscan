@@ -12,38 +12,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { QuizQuestion, DEFAULT_QUIZ } from "@/lib/quiz-storage";
-
-// ─── Sheet dimensions (must match server/scan.ts) ─────────────────────────────
-const SHEET_W = 320;
-const SHEET_H = 450;
+import { computeGridLayout, SHEET_W, SHEET_H } from "@/lib/grid-layout";
 
 // Registration mark: 20×20 black square, 9.6px from each edge
-// Corners:  TL(19.6,28)   TR(300.4,28)   BL(19.6,422)   BR(300.4,422)
-// Centers:  CL(19.6,225)  CR(300.4,225)  ← center-side marks
 const MARK_SIZE = 20;
-const MARK_OFFSET_X = 9.6; // from left/right edge
-const MARK_OFFSET_Y = 18;  // from top/bottom edge
-// Center-side marks sit at the vertical midpoint of the sheet
-const CENTER_MARK_TOP = (SHEET_H - MARK_SIZE) / 2; // = 215 → center y = 225
+const MARK_OFFSET_X = 9.6;
+const MARK_OFFSET_Y = 18;
+const CENTER_MARK_TOP = (SHEET_H - MARK_SIZE) / 2;
 
-// Bubble grid (normalized → pixel)
-// col A(0) nx=0.25  B(1) nx=0.40  C(2) nx=0.55  D(3) nx=0.70
-// row 0 ny=0.22  1 ny=0.35  2 ny=0.48  3 ny=0.61  4 ny=0.74
-const BUBBLE_D = 22; // diameter
-const BUBBLE_R = BUBBLE_D / 2;
-const LETTERS = ["A", "B", "C", "D"];
-
-function bubblePx(row: number, col: number) {
-  return {
-    left: (0.25 + col * 0.15) * SHEET_W - BUBBLE_R,
-    top: (0.22 + row * 0.13) * SHEET_H - BUBBLE_R,
-  };
-}
-
-// ─── Component ─────────────────────────────────────────────────────────────────
 export default function SheetScreen() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ questions?: string }>();
+  const params = useLocalSearchParams<{ questions?: string; choiceCount?: string }>();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
@@ -54,9 +33,14 @@ export default function SheetScreen() {
     } catch {}
   }
 
+  const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
+  const layout = computeGridLayout(questions.length, choiceCount);
+
+  const bubbleD = layout.bubbleDiameterSheet;
+  const bubbleR = bubbleD / 2;
+
   return (
     <View style={[styles.screen, { paddingTop: topPad }]}>
-      {/* Header bar */}
       <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
@@ -68,7 +52,6 @@ export default function SheetScreen() {
         <View style={{ width: 32 }} />
       </View>
 
-      {/* Instruction banner */}
       <View style={styles.banner}>
         <Ionicons name="print-outline" size={14} color={Colors.accent} />
         <Text style={styles.bannerText}>
@@ -83,9 +66,9 @@ export default function SheetScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Printable sheet ── */}
+        {/* Printable sheet */}
         <View style={styles.sheetContainer}>
-          {/* Registration marks — 4 corners + 2 center-side (6 total) */}
+          {/* Registration marks — 4 corners + 2 center-side */}
           <View style={[styles.regMark, { left: MARK_OFFSET_X, top: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { right: MARK_OFFSET_X, top: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { left: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
@@ -95,68 +78,95 @@ export default function SheetScreen() {
 
           {/* Title */}
           <Text style={styles.sheetTitle}>GradeSnap</Text>
-          <Text style={styles.sheetSubtitle}>Answer Sheet  •  5 Questions</Text>
+          <Text style={styles.sheetSubtitle}>
+            Answer Sheet  •  {questions.length} Question{questions.length !== 1 ? "s" : ""}
+          </Text>
 
-          {/* Column headers: A B C D */}
-          {LETTERS.map((letter, col) => (
-            <Text
-              key={letter}
-              style={[
-                styles.colHeader,
-                {
-                  left: (0.25 + col * 0.15) * SHEET_W - 8,
-                  top: 0.22 * SHEET_H - 26,
-                },
-              ]}
-            >
-              {letter}
-            </Text>
+          {/* Per-column headers: A B C D [E] */}
+          {Array.from({ length: layout.questionColumns }).map((_, qCol) => (
+            <React.Fragment key={`hdr-${qCol}`}>
+              {layout.letters.map((letter, c) => {
+                const q0 = qCol * layout.questionsPerColumn;
+                const { nx } = layout.bubbleCenter(q0, c);
+                const { ny } = layout.bubbleCenter(q0, 0);
+                const fontSize = Math.max(7, Math.min(11, bubbleD * 0.55));
+                return (
+                  <Text
+                    key={`${qCol}-${letter}`}
+                    style={[
+                      styles.colHeader,
+                      {
+                        left: nx * SHEET_W - 8,
+                        top: ny * SHEET_H - bubbleD - 6,
+                        fontSize,
+                      },
+                    ]}
+                  >
+                    {letter}
+                  </Text>
+                );
+              })}
+            </React.Fragment>
           ))}
 
-          {/* Bubbles + question number labels */}
-          {Array.from({ length: 5 }).map((_, row) => (
-            <React.Fragment key={row}>
+          {/* Bubbles + row labels */}
+          {Array.from({ length: questions.length }).map((_, q) => (
+            <React.Fragment key={q}>
               {/* Row label */}
               <Text
                 style={[
                   styles.rowLabel,
-                  { top: (0.22 + row * 0.13) * SHEET_H - 8 },
+                  {
+                    left: layout.labelX(q) * SHEET_W - 10,
+                    top: layout.bubbleCenter(q, 0).ny * SHEET_H - Math.max(5, bubbleD * 0.35),
+                    fontSize: Math.max(6, Math.min(11, bubbleD * 0.55)),
+                  },
                 ]}
               >
-                {row + 1}
+                {q + 1}
               </Text>
 
               {/* Bubbles */}
-              {LETTERS.map((_, col) => {
-                const { left, top } = bubblePx(row, col);
+              {layout.letters.map((_, c) => {
+                const { nx, ny } = layout.bubbleCenter(q, c);
                 return (
                   <View
-                    key={col}
-                    style={[styles.bubble, { left, top }]}
+                    key={`${q}-${c}`}
+                    style={[
+                      styles.bubble,
+                      {
+                        left: nx * SHEET_W - bubbleR,
+                        top: ny * SHEET_H - bubbleR,
+                        width: bubbleD,
+                        height: bubbleD,
+                        borderRadius: bubbleR,
+                      },
+                    ]}
                   />
                 );
               })}
             </React.Fragment>
           ))}
 
-          {/* Footer note */}
           <Text style={styles.sheetFooter}>
             Fill circles completely with dark pencil or pen
           </Text>
         </View>
 
-        {/* Question reference */}
-        <View style={styles.keySection}>
-          <Text style={styles.keySectionTitle}>Questions on this quiz</Text>
-          {questions.map((q) => (
-            <View key={q.id} style={styles.keyRow}>
-              <View style={styles.keyNumBadge}>
-                <Text style={styles.keyNum}>{q.id}</Text>
+        {/* Question reference (only show text if ≤10 questions and they have text) */}
+        {questions.length <= 10 && questions.some((q) => q.text) && (
+          <View style={styles.keySection}>
+            <Text style={styles.keySectionTitle}>Questions on this quiz</Text>
+            {questions.map((q) => (
+              <View key={q.id} style={styles.keyRow}>
+                <View style={styles.keyNumBadge}>
+                  <Text style={styles.keyNum}>{q.id}</Text>
+                </View>
+                <Text style={styles.keyText} numberOfLines={2}>{q.text}</Text>
               </View>
-              <Text style={styles.keyText} numberOfLines={2}>{q.text}</Text>
-            </View>
-          ))}
-        </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -205,15 +215,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     gap: 24,
   },
-
-  // ── Printable sheet ──
   sheetContainer: {
     width: SHEET_W,
     height: SHEET_H,
     backgroundColor: "#FFFFFF",
     borderRadius: 4,
     position: "relative",
-    // shadow so it looks like paper
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
@@ -250,24 +257,18 @@ const styles = StyleSheet.create({
     position: "absolute",
     width: 16,
     textAlign: "center",
-    fontSize: 11,
     fontWeight: "700",
     color: "#000",
   },
   rowLabel: {
     position: "absolute",
-    left: SHEET_W * 0.12,
     width: 20,
     textAlign: "right",
-    fontSize: 11,
     fontWeight: "600",
     color: "#333",
   },
   bubble: {
     position: "absolute",
-    width: BUBBLE_D,
-    height: BUBBLE_D,
-    borderRadius: BUBBLE_R,
     borderWidth: 1.5,
     borderColor: "#000000",
     backgroundColor: "#FFFFFF",
@@ -282,8 +283,6 @@ const styles = StyleSheet.create({
     color: "#666",
     fontStyle: "italic",
   },
-
-  // ── Question reference ──
   keySection: {
     width: "100%",
     gap: 10,
