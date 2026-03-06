@@ -28,14 +28,27 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, QuizQuestion } from "@/lib/quiz-storage";
-import { detectSheet, scanSheet } from "@/lib/scan-offline";
+import { detectAndScan, scanSheet } from "@/lib/scan-offline";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
-// Portrait frame matching the 320×450 answer sheet ratio (height = width × 1.40625)
-const FRAME_W = SCREEN_WIDTH * 0.72;
-const FRAME_H = FRAME_W * (450 / 320);
-const CORNER_SIZE = 28;
-const CORNER_THICKNESS = 3;
+// Big square viewfinder — easy to aim at the paper like ZipGrade
+const FRAME_W = SCREEN_WIDTH * 0.92;
+const FRAME_H = FRAME_W; // square
+// 4 individual square targets for each corner registration mark
+// The answer sheet is 320×450 (portrait). Inside the square viewfinder,
+// the sheet fills the height, so paper width = FRAME_W × (320/450).
+const PAPER_IN_FRAME_W = FRAME_W * (320 / 450);
+const PAPER_OFFSET_X = (FRAME_W - PAPER_IN_FRAME_W) / 2;
+// Mark centers in the viewfinder (accounting for centered portrait sheet)
+const MARK_X = [
+  PAPER_OFFSET_X + (19.6 / 320) * PAPER_IN_FRAME_W,   // left marks
+  PAPER_OFFSET_X + (300.4 / 320) * PAPER_IN_FRAME_W,   // right marks
+];
+const MARK_Y = [
+  (28.0 / 450) * FRAME_H,   // top marks
+  (422.0 / 450) * FRAME_H,  // bottom marks
+];
+const TARGET_SIZE = 64;
 
 // Orient → crop to frame area → resize. Returns base64 JPEG or null.
 async function cropToFrame(
@@ -44,6 +57,7 @@ async function cropToFrame(
   targetWidth: number,
   compress: number,
 ): Promise<string | null> {
+  // First pass: resize only to get dimensions (no redundant JPEG encode)
   const step1 = await ImageManipulator.manipulateAsync(
     photoUri,
     [{ resize: { width: targetWidth } }],
@@ -63,7 +77,7 @@ async function cropToFrame(
   );
   const coverOffX = Math.max(0, (oriented.width - SCREEN_WIDTH * imgPxPerPt) / 2);
   const coverOffY = Math.max(0, (oriented.height - SCREEN_HEIGHT * imgPxPerPt) / 2);
-  const MARGIN = 0.12;
+  const MARGIN = 0.20;
   const ix0 = Math.round(Math.max(0, coverOffX + (framePos.x - framePos.width * MARGIN) * imgPxPerPt));
   const iy0 = Math.round(Math.max(0, coverOffY + (framePos.y - framePos.height * MARGIN) * imgPxPerPt));
   const ix1 = Math.round(Math.min(oriented.width, coverOffX + (framePos.x + framePos.width * (1 + MARGIN)) * imgPxPerPt));
@@ -80,52 +94,7 @@ async function cropToFrame(
   return result.base64 ?? null;
 }
 
-function CornerBracket({
-  position,
-  detected,
-}: {
-  position: "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
-  detected: boolean;
-}) {
-  const isTop = position.startsWith("top");
-  const isLeft = position.endsWith("Left");
-  const color = detected ? Colors.success : Colors.scanFrame;
-
-  return (
-    <View
-      style={[
-        styles.corner,
-        isTop ? { top: 0 } : { bottom: 0 },
-        isLeft ? { left: 0 } : { right: 0 },
-      ]}
-    >
-      <View
-        style={[
-          styles.cornerH,
-          isTop
-            ? { top: 0, borderTopWidth: CORNER_THICKNESS }
-            : { bottom: 0, borderBottomWidth: CORNER_THICKNESS },
-          isLeft
-            ? { left: 0, borderLeftWidth: CORNER_THICKNESS }
-            : { right: 0, borderRightWidth: CORNER_THICKNESS },
-          { borderColor: color },
-        ]}
-      />
-      <View
-        style={[
-          styles.cornerV,
-          isTop
-            ? { top: 0, borderTopWidth: CORNER_THICKNESS }
-            : { bottom: 0, borderBottomWidth: CORNER_THICKNESS },
-          isLeft
-            ? { left: 0, borderLeftWidth: CORNER_THICKNESS }
-            : { right: 0, borderRightWidth: CORNER_THICKNESS },
-          { borderColor: color },
-        ]}
-      />
-    </View>
-  );
-}
+// No CornerBracket — using a single rounded-border box like ZipGrade
 
 
 export default function ScannerScreen() {
@@ -140,20 +109,16 @@ export default function ScannerScreen() {
   const frameRef = useRef<View>(null);
   const isScanningRef = useRef(false);
   const isDetectingRef = useRef(false);
-  // Cache the last detect photo so handleScan can reuse it — avoids a second takePictureAsync
-  const lastDetectRef = useRef<{
-    uri: string;
-    framePos: { x: number; y: number; width: number; height: number };
-    ts: number;
-  } | null>(null);
 
-  // Lightweight detect poll: takes a frame every 2s and checks for registration marks.
+  // Single-pass detect+scan poll: captures a frame, runs detection and (if found)
+  // full bubble scanning in one OpenCV session. Navigates to results instantly.
   const runDetect = useCallback(async () => {
     if (isScanningRef.current || isDetectingRef.current || !cameraRef.current || !frameRef.current) return;
+    if (questions.length === 0) return;
     isDetectingRef.current = true;
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.4,
+        quality: 0.5,
         base64: false,
         skipProcessing: true,
       });
@@ -165,18 +130,34 @@ export default function ScannerScreen() {
           );
         }
       );
-      // Store photo for reuse — handleScan can skip takePictureAsync if this is fresh
-      lastDetectRef.current = { uri: photo.uri, framePos, ts: Date.now() };
-      const b64 = await cropToFrame(photo.uri, framePos, 400, 0.4);
+      const b64 = await cropToFrame(photo.uri, framePos, 640, 0.5);
       if (!b64) { setSheetDetected(false); return; }
-      const data = await detectSheet(b64);
-      setSheetDetected(!!data.found);
+
+      const result = await detectAndScan(b64, questions);
+      if (!result.found) { setSheetDetected(false); return; }
+
+      // Sheet found and scanned in one pass — navigate immediately
+      setSheetDetected(true);
+      isScanningRef.current = true;
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setIsScanning(true);
+      setScanDone(true);
+      await new Promise((r) => setTimeout(r, 300));
+
+      router.push({
+        pathname: "/results",
+        params: {
+          answers: JSON.stringify(result.answers),
+          questions: JSON.stringify(questions),
+          debugImage: b64,
+        },
+      });
     } catch {
       // silent — detection errors don't block scanning
     } finally {
       isDetectingRef.current = false;
     }
-  }, []);
+  }, [questions]);
 
   // Reset scan state and start live detection every time this screen is focused
   useFocusEffect(
@@ -187,7 +168,7 @@ export default function ScannerScreen() {
       setScanError(null);
       setSheetDetected(false);
       runDetect();
-      const detectInterval = setInterval(runDetect, 2000);
+      const detectInterval = setInterval(runDetect, 700);
       return () => {
         clearInterval(detectInterval);
         setSheetDetected(false);
@@ -248,6 +229,7 @@ export default function ScannerScreen() {
     transform: [{ scale: pulseScale.value }],
   }));
 
+  // Manual scan button fallback — takes a fresh high-quality photo
   const handleScan = useCallback(async () => {
     if (isScanningRef.current) return;
     isScanningRef.current = true;
@@ -258,33 +240,22 @@ export default function ScannerScreen() {
     try {
       if (!cameraRef.current) throw new Error("Camera not ready");
 
-      // Reuse the last detect photo if it's fresh (< 4s) — saves ~1s takePictureAsync call.
-      // The detect photo is full native resolution; we just re-crop at higher output quality.
-      const recent = lastDetectRef.current;
-      let base64: string | null = null;
-      if (recent && Date.now() - recent.ts < 4000) {
-        base64 = await cropToFrame(recent.uri, recent.framePos, 800, 0.9);
-      }
-      if (!base64) {
-        // Fresh photo fallback (manual tap or detect photo expired)
-        const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
-          (resolve, reject) => {
-            if (!frameRef.current) return reject(new Error("frame ref not ready"));
-            (frameRef.current as any).measureInWindow(
-              (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
-            );
-          }
-        );
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.9,
-          base64: false,
-          skipProcessing: false,
-        });
-        base64 = await cropToFrame(photo.uri, framePos, 800, 0.9);
-        if (!base64) throw new Error("Image capture failed");
-      }
+      const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
+        (resolve, reject) => {
+          if (!frameRef.current) return reject(new Error("frame ref not ready"));
+          (frameRef.current as any).measureInWindow(
+            (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
+          );
+        }
+      );
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.8,
+        base64: false,
+        skipProcessing: true,
+      });
+      const base64 = await cropToFrame(photo.uri, framePos, 800, 0.8);
+      if (!base64) throw new Error("Image capture failed");
 
-      // On-device OpenCV processing — no server required
       const data = await scanSheet(base64, questions);
       if (!data.answers) {
         throw new Error("Fit the sheet inside the frame and try again");
@@ -292,7 +263,7 @@ export default function ScannerScreen() {
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setScanDone(true);
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 300));
 
       router.push({
         pathname: "/results",
@@ -305,21 +276,13 @@ export default function ScannerScreen() {
     } catch (err: any) {
       console.error("Scan failed:", err);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setScanError(err?.message ?? "Scan failed — make sure the server is running.");
+      setScanError(err?.message ?? "Scan failed — try aligning the sheet.");
     } finally {
       isScanningRef.current = false;
       setIsScanning(false);
       setScanDone(false);
     }
   }, [questions]);
-
-  // Auto-scan: when the sheet is detected (brackets turn green), wait 700ms then scan
-  // automatically. Timer is cleared if the sheet moves out of frame before firing.
-  useEffect(() => {
-    if (!sheetDetected || isScanningRef.current) return;
-    const timer = setTimeout(handleScan, 200);
-    return () => clearTimeout(timer);
-  }, [sheetDetected, handleScan]);
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
@@ -390,7 +353,7 @@ export default function ScannerScreen() {
           </View>
         </View>
         <Text style={[styles.headerSub, sheetDetected && { color: Colors.success }]}>
-          {sheetDetected ? "Sheet detected — tap Scan!" : "Fit the sheet inside the brackets, then tap Scan"}
+          {sheetDetected ? "Sheet detected — scanning..." : "Point camera at the answer sheet"}
         </Text>
       </Animated.View>
 
@@ -399,11 +362,22 @@ export default function ScannerScreen() {
           <Animated.View style={[styles.frameGlow, frameGlowStyle]} />
 
           <View style={styles.frame}>
-            {(["topLeft", "topRight", "bottomLeft", "bottomRight"] as const).map(
-              (pos) => (
-                <CornerBracket key={pos} position={pos} detected={sheetDetected} />
-              )
-            )}
+            {/* 4 corner target squares — one per registration mark */}
+            {([
+              { top: MARK_Y[0] - TARGET_SIZE / 2, left: MARK_X[0] - TARGET_SIZE / 2 },
+              { top: MARK_Y[0] - TARGET_SIZE / 2, left: MARK_X[1] - TARGET_SIZE / 2 },
+              { top: MARK_Y[1] - TARGET_SIZE / 2, left: MARK_X[0] - TARGET_SIZE / 2 },
+              { top: MARK_Y[1] - TARGET_SIZE / 2, left: MARK_X[1] - TARGET_SIZE / 2 },
+            ] as const).map((pos, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.targetBox,
+                  { top: pos.top, left: pos.left },
+                  sheetDetected && styles.targetBoxDetected,
+                ]}
+              />
+            ))}
 
             <Animated.View style={[styles.scanLine, scanLineStyle]} />
 
@@ -429,7 +403,7 @@ export default function ScannerScreen() {
         </Animated.View>
 
         <Animated.View entering={FadeInDown.duration(500).delay(200)}>
-          <Text style={styles.frameLabel}>Fit the sheet inside the brackets — hold the phone flat</Text>
+          <Text style={styles.frameLabel}>Align 4 corner squares with targets — scans automatically</Text>
         </Animated.View>
       </View>
 
@@ -506,7 +480,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   overlay: {
-    backgroundColor: "rgba(0,0,0,0.45)",
+    backgroundColor: "rgba(0,0,0,0.30)",
   },
   header: {
     paddingHorizontal: 24,
@@ -572,24 +546,18 @@ const styles = StyleSheet.create({
     width: FRAME_W,
     height: FRAME_H,
     position: "relative",
-    overflow: "hidden",
   },
-  corner: {
+  targetBox: {
     position: "absolute",
-    width: CORNER_SIZE,
-    height: CORNER_SIZE,
-  },
-  cornerH: {
-    position: "absolute",
-    width: CORNER_SIZE,
-    height: CORNER_THICKNESS,
+    width: TARGET_SIZE,
+    height: TARGET_SIZE,
+    borderWidth: 2.5,
+    borderRadius: 6,
     borderColor: Colors.scanFrame,
+    zIndex: 10,
   },
-  cornerV: {
-    position: "absolute",
-    width: CORNER_THICKNESS,
-    height: CORNER_SIZE,
-    borderColor: Colors.scanFrame,
+  targetBoxDetected: {
+    borderColor: Colors.success,
   },
   scanLine: {
     position: "absolute",

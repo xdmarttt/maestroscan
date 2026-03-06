@@ -138,7 +138,9 @@ function ringBright(
   const ro = Math.ceil(rOuter);
   const riSq = rInner * rInner;
   const roSq = rOuter * rOuter;
-  const vals: number[] = [];
+  // Use 256-bin histogram instead of sort — O(n) vs O(n log n)
+  const hist = new Uint16Array(256);
+  let count = 0;
   for (let dy = -ro; dy <= ro; dy++) {
     const py = icy + dy;
     if (py < 0 || py >= H) continue;
@@ -147,14 +149,28 @@ function ringBright(
       if (px < 0 || px >= W) continue;
       const dSq = dx * dx + dy * dy;
       if (dSq < riSq || dSq > roSq) continue;
-      vals.push(pixels[py * W + px]);
+      hist[pixels[py * W + px]]++;
+      count++;
     }
   }
-  if (vals.length === 0) return 200;
-  vals.sort((a, b) => a - b);
-  const cutoffIdx = Math.floor(vals.length * (1 - pct / 100));
-  const bright = vals.slice(cutoffIdx);
-  return bright.reduce((a, b) => a + b, 0) / bright.length;
+  if (count === 0) return 200;
+  // Find brightest pct% of values using histogram
+  const cutoff = Math.floor(count * (1 - pct / 100));
+  let skipped = 0;
+  let sum = 0;
+  let brightCount = 0;
+  for (let v = 0; v < 256; v++) {
+    if (hist[v] === 0) continue;
+    if (skipped + hist[v] <= cutoff) {
+      skipped += hist[v];
+    } else {
+      const take = hist[v] - Math.max(0, cutoff - skipped);
+      sum += v * take;
+      brightCount += take;
+      skipped += hist[v] - take;
+    }
+  }
+  return brightCount > 0 ? sum / brightCount : 200;
 }
 
 // Histogram normalization: percentile stretch (2–98), same as Python
@@ -293,11 +309,12 @@ function findFourMarks(
   if (candidates.length < 4) return null;
 
   // One darkest candidate per quadrant
+  // Wider quadrant boundaries — marks slightly off-center still get picked up
   const quads = [
-    { nx0: 0.0, nx1: 0.48, ny0: 0.0, ny1: 0.48 }, // TL
-    { nx0: 0.52, nx1: 1.0, ny0: 0.0, ny1: 0.48 }, // TR
-    { nx0: 0.0, nx1: 0.48, ny0: 0.52, ny1: 1.0 }, // BL
-    { nx0: 0.52, nx1: 1.0, ny0: 0.52, ny1: 1.0 }, // BR
+    { nx0: 0.0, nx1: 0.55, ny0: 0.0, ny1: 0.55 }, // TL
+    { nx0: 0.45, nx1: 1.0, ny0: 0.0, ny1: 0.55 }, // TR
+    { nx0: 0.0, nx1: 0.55, ny0: 0.45, ny1: 1.0 }, // BL
+    { nx0: 0.45, nx1: 1.0, ny0: 0.45, ny1: 1.0 }, // BR
   ];
 
   const corners: [number, number][] = [];
@@ -330,10 +347,10 @@ function findFourMarks(
   // Geometric validation (matches Python)
   const rectW = (tr[0] - tl[0] + br[0] - bl[0]) / 2;
   const rectH = (bl[1] - tl[1] + br[1] - tr[1]) / 2;
-  if (rectW < W * 0.15 || rectH < H * 0.15) return null;
+  if (rectW < W * 0.10 || rectH < H * 0.10) return null;
 
   const aspect = rectH / (rectW + 1e-6);
-  if (aspect < 0.6 || aspect > 3.5) return null;
+  if (aspect < 0.5 || aspect > 4.0) return null;
 
   if (tl[0] >= tr[0] || bl[0] >= br[0] || tl[1] >= bl[1] || tr[1] >= br[1]) return null;
 
@@ -450,22 +467,6 @@ export async function scanSheet(
   // 5. Get warped pixel buffer
   const { cols: wW, rows: wH, buffer: rawPixels } = OpenCV.matToBuffer(warpedMat, "uint8");
 
-  // DEBUG: upload warped image to server so it can be inspected on disk.
-  // Fire-and-forget — remove this block once offline scanning is stable.
-  try {
-    const { base64: warpedB64 } = OpenCV.toJSValue(warpedMat, "jpeg");
-    const domain = process.env.EXPO_PUBLIC_DOMAIN;
-    if (domain && warpedB64) {
-      const isLocal = /^(localhost|127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(domain);
-      const apiBase = `${isLocal ? "http" : "https"}://${domain}`;
-      fetch(`${apiBase}/api/debug-save-warped`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: warpedB64 }),
-      }).catch(() => {}); // intentionally silent
-    }
-  } catch {}
-
   OpenCV.releaseBuffers([warpedMat.id]);
 
   // 6. Histogram normalization (percentile stretch 2–98, same as Python)
@@ -502,6 +503,109 @@ export async function scanSheet(
   }
 
   return { answers, confidence };
+}
+
+/**
+ * Combined detect + scan in a single pass.
+ * One base64→Mat decode, one grayscale conversion — avoids double processing.
+ * Returns null if marks not found (no error thrown), or answers if successful.
+ */
+export async function detectAndScan(
+  base64: string,
+  questions: QuizQuestion[]
+): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[] }> {
+  if (!isNativeAvailable()) {
+    // Server fallback: detect first, then scan if found
+    try {
+      const detectResp = await fetch(`${getApiBase()}/api/detect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64 }),
+      });
+      const detectData = await detectResp.json();
+      if (!detectData.found) return { found: false };
+
+      const scanResp = await fetch(`${getApiBase()}/api/scan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64: base64, questions }),
+      });
+      if (!scanResp.ok) return { found: false };
+      const scanData = await scanResp.json();
+      return { found: true, ...scanData };
+    } catch {
+      return { found: false };
+    }
+  }
+
+  // Single OpenCV session: decode → gray → detect → warp → sample
+  const bgrMat = OpenCV.base64ToMat(base64);
+  const grayMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
+  OpenCV.invoke("cvtColor", bgrMat, grayMat, ColorConversionCodes.COLOR_BGR2GRAY);
+  OpenCV.releaseBuffers([bgrMat.id]);
+
+  const { cols: W, rows: H, buffer: pixels } = OpenCV.matToBuffer(grayMat, "uint8");
+  const corners = findFourMarks(grayMat, pixels, W, H);
+
+  if (!corners) {
+    OpenCV.releaseBuffers([grayMat.id]);
+    return { found: false };
+  }
+
+  // Marks found — continue straight to warp + bubble sampling
+  const [tl, tr, bl, br] = corners;
+  const p2f = (x: number, y: number) => OpenCV.createObject(ObjectType.Point2f, x, y);
+  const srcPts = OpenCV.createObject(ObjectType.Point2fVector, [
+    p2f(tl[0], tl[1]), p2f(tr[0], tr[1]), p2f(bl[0], bl[1]), p2f(br[0], br[1]),
+  ]);
+  const dstPts = OpenCV.createObject(ObjectType.Point2fVector, [
+    p2f(IDEAL_CORNERS[0][0], IDEAL_CORNERS[0][1]),
+    p2f(IDEAL_CORNERS[1][0], IDEAL_CORNERS[1][1]),
+    p2f(IDEAL_CORNERS[2][0], IDEAL_CORNERS[2][1]),
+    p2f(IDEAL_CORNERS[3][0], IDEAL_CORNERS[3][1]),
+  ]);
+
+  const M = OpenCV.invoke("getPerspectiveTransform", srcPts, dstPts, DecompTypes.DECOMP_LU);
+  const warpedMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
+  const warpSize = OpenCV.createObject(ObjectType.Size, WARP_W, WARP_H);
+  const borderVal = OpenCV.createObject(ObjectType.Scalar, 0);
+  OpenCV.invoke(
+    "warpPerspective", grayMat, warpedMat, M, warpSize,
+    InterpolationFlags.INTER_LINEAR, BorderTypes.BORDER_CONSTANT, borderVal
+  );
+  OpenCV.releaseBuffers([grayMat.id, srcPts.id, dstPts.id, M.id, warpSize.id, borderVal.id]);
+
+  const { cols: wW, rows: wH, buffer: rawPixels } = OpenCV.matToBuffer(warpedMat, "uint8");
+  OpenCV.releaseBuffers([warpedMat.id]);
+
+  const warpedPixels = normalizePixels(rawPixels);
+
+  const answers: string[] = [];
+  const confidence: number[] = [];
+  for (let row = 0; row < GRID_ROWS; row++) {
+    const ratios: number[] = [];
+    for (let col = 0; col < GRID_COLS; col++) {
+      const cx = BUBBLE_NX[col] * wW;
+      const cy = BUBBLE_NY[row] * wH;
+      const inner = ringMean(warpedPixels, wW, wH, cx, cy, 0, INNER_R);
+      const outer = ringBright(warpedPixels, wW, wH, cx, cy, OUTER_R1, OUTER_R2);
+      ratios.push((outer - inner) / Math.max(outer, 64));
+    }
+    const sorted = [...ratios].sort((a, b) => b - a);
+    const best = sorted[0];
+    const second = sorted[1] ?? 0;
+    const gap = best - second;
+    const bestIdx = ratios.indexOf(best);
+    if (best >= MIN_RATIO && gap >= MIN_GAP) {
+      answers.push(LETTERS[bestIdx]);
+      confidence.push(Math.min(1, gap / 0.4));
+    } else {
+      answers.push("?");
+      confidence.push(0);
+    }
+  }
+
+  return { found: true, answers, confidence };
 }
 
 // ── Fallback: perspective-transform JS library ────────────────────────────────
