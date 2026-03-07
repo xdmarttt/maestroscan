@@ -119,9 +119,9 @@ export default function ScannerScreen() {
     isDetectingRef.current = true;
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.5,
+        quality: 0.7,
         base64: false,
-        skipProcessing: true,
+        skipProcessing: false,
       });
       const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
         (resolve, reject) => {
@@ -131,7 +131,7 @@ export default function ScannerScreen() {
           );
         }
       );
-      const b64 = await cropToFrame(photo.uri, framePos, 640, 0.5);
+      const b64 = await cropToFrame(photo.uri, framePos, 800, 0.7);
       if (!b64) { setSheetDetected(false); return; }
 
       const result = await detectAndScan(b64, questions, choiceCount);
@@ -258,11 +258,11 @@ export default function ScannerScreen() {
         }
       );
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.8,
+        quality: 0.9,
         base64: false,
-        skipProcessing: true,
+        skipProcessing: false,
       });
-      const base64 = await cropToFrame(photo.uri, framePos, 800, 0.8);
+      const base64 = await cropToFrame(photo.uri, framePos, 1200, 0.85);
       if (!base64) throw new Error("Image capture failed");
 
       const data = await scanSheet(base64, questions, choiceCount);
