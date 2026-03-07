@@ -108,90 +108,7 @@ function ringMean(
   return count > 0 ? sum / count : 200;
 }
 
-function ringBright(
-  pixels: Uint8Array,
-  W: number,
-  H: number,
-  cx: number,
-  cy: number,
-  rInner: number,
-  rOuter: number,
-  pct = 80
-): number {
-  const icx = Math.round(cx);
-  const icy = Math.round(cy);
-  const ro = Math.ceil(rOuter);
-  const riSq = rInner * rInner;
-  const roSq = rOuter * rOuter;
-  // Use 256-bin histogram instead of sort — O(n) vs O(n log n)
-  const hist = new Uint16Array(256);
-  let count = 0;
-  for (let dy = -ro; dy <= ro; dy++) {
-    const py = icy + dy;
-    if (py < 0 || py >= H) continue;
-    for (let dx = -ro; dx <= ro; dx++) {
-      const px = icx + dx;
-      if (px < 0 || px >= W) continue;
-      const dSq = dx * dx + dy * dy;
-      if (dSq < riSq || dSq > roSq) continue;
-      hist[pixels[py * W + px]]++;
-      count++;
-    }
-  }
-  if (count === 0) return 200;
-  // Find brightest pct% of values using histogram
-  const cutoff = Math.floor(count * (1 - pct / 100));
-  let skipped = 0;
-  let sum = 0;
-  let brightCount = 0;
-  for (let v = 0; v < 256; v++) {
-    if (hist[v] === 0) continue;
-    if (skipped + hist[v] <= cutoff) {
-      skipped += hist[v];
-    } else {
-      const take = hist[v] - Math.max(0, cutoff - skipped);
-      sum += v * take;
-      brightCount += take;
-      skipped += hist[v] - take;
-    }
-  }
-  return brightCount > 0 ? sum / brightCount : 200;
-}
-
-// Histogram normalization: percentile stretch (2–98), same as Python
-// Uses 256-bin histogram instead of sort — O(n) vs O(n log n)
-function normalizePixels(pixels: Uint8Array): Uint8Array {
-  const hist = new Uint32Array(256);
-  const step = 4; // sample every 4th pixel
-  let sampleCount = 0;
-  for (let i = 0; i < pixels.length; i += step) {
-    hist[pixels[i]]++;
-    sampleCount++;
-  }
-  // Find 2nd and 98th percentile via cumulative histogram
-  const loTarget = Math.floor(sampleCount * 0.02);
-  const hiTarget = Math.floor(sampleCount * 0.98);
-  let cum = 0;
-  let lo = 0;
-  let hi = 255;
-  for (let v = 0; v < 256; v++) {
-    cum += hist[v];
-    if (cum <= loTarget) lo = v;
-    if (cum < hiTarget) hi = v;
-  }
-  if (hi <= lo) return pixels;
-  const range = hi - lo;
-  // Precompute LUT for O(1) per-pixel mapping
-  const lut = new Uint8Array(256);
-  for (let v = 0; v < 256; v++) {
-    lut[v] = Math.max(0, Math.min(255, Math.round(((v - lo) / range) * 255)));
-  }
-  const out = new Uint8Array(pixels.length);
-  for (let i = 0; i < pixels.length; i++) {
-    out[i] = lut[pixels[i]];
-  }
-  return out;
-}
+// ringBright removed — outer ring now uses ringMean for speed
 
 // ── OpenCV mark detection ─────────────────────────────────────────────────────
 
@@ -251,6 +168,10 @@ function findMarkCandidates(
   const maxArea = (W * 0.18) ** 2;
   const candidates: Candidate[] = [];
 
+  // Track quadrant coverage — stop early once all 4 corners have candidates
+  const quadHits = [false, false, false, false]; // TL, TR, BL, BR
+  let quadsFilled = 0;
+
   for (let i = 0; i < numContours; i++) {
     const cnt = OpenCV.copyObjectFromVector(contours, i);
     const { value: area } = OpenCV.invoke("contourArea", cnt);
@@ -262,24 +183,21 @@ function findMarkCandidates(
 
     const rectHandle = OpenCV.invoke("boundingRect", cnt);
     const { x, y, width: bw, height: bh } = OpenCV.toJSValue(rectHandle);
-    OpenCV.releaseBuffers([rectHandle.id]);
+    OpenCV.releaseBuffers([rectHandle.id, cnt.id]);
 
-    if (bw < 2 || bh < 2) {
-      OpenCV.releaseBuffers([cnt.id]);
-      continue;
-    }
-    if (Math.min(bw, bh) / Math.max(bw, bh) < 0.6) {
-      OpenCV.releaseBuffers([cnt.id]);
-      continue;
-    }
-    if (area / (bw * bh) < 0.82) {
-      OpenCV.releaseBuffers([cnt.id]);
-      continue;
-    }
+    if (bw < 2 || bh < 2) continue;
+    if (Math.min(bw, bh) / Math.max(bw, bh) < 0.6) continue;
+    if (area / (bw * bh) < 0.82) continue;
 
-    // Use bounding rect center as centroid (accurate for solid squares)
-    candidates.push({ cx: x + bw / 2, cy: y + bh / 2, area });
-    OpenCV.releaseBuffers([cnt.id]);
+    const cx = x + bw / 2;
+    const cy = y + bh / 2;
+    candidates.push({ cx, cy, area });
+
+    // Check which quadrant this falls in
+    const qi = (cy < H * 0.5 ? 0 : 2) + (cx < W * 0.5 ? 0 : 1);
+    if (!quadHits[qi]) { quadHits[qi] = true; quadsFilled++; }
+    // Once all 4 quadrants have at least one candidate, stop processing
+    if (quadsFilled === 4 && candidates.length >= 8) break;
   }
 
   OpenCV.releaseBuffers([binary.id, kernel.id, contours.id]);
@@ -468,13 +386,12 @@ export async function scanSheet(
   );
   OpenCV.releaseBuffers([grayMat.id, srcPts.id, dstPts.id, M.id, warpSize.id, borderVal.id]);
 
-  // 5. Get warped pixel buffer
-  const { cols: wW, rows: wH, buffer: rawPixels } = OpenCV.matToBuffer(warpedMat, "uint8");
+  // 5. Normalize in native OpenCV (much faster than JS pixel loop)
+  OpenCV.invoke("normalize", warpedMat, warpedMat, 0, 255, 32 /* NORM_MINMAX */);
 
+  // 6. Get warped pixel buffer
+  const { cols: wW, rows: wH, buffer: warpedPixels } = OpenCV.matToBuffer(warpedMat, "uint8");
   OpenCV.releaseBuffers([warpedMat.id]);
-
-  // 6. Histogram normalization (percentile stretch 2–98, same as Python)
-  const warpedPixels = normalizePixels(rawPixels);
 
   // 7. Sample bubble grid using dynamic layout
   const layout = computeGridLayout(questions.length, choiceCount);
@@ -488,16 +405,17 @@ export async function scanSheet(
       const cx = nx * wW;
       const cy = ny * wH;
       const inner = ringMean(warpedPixels, wW, wH, cx, cy, 0, layout.innerR);
-      const outer = ringBright(warpedPixels, wW, wH, cx, cy, layout.outerR1, layout.outerR2);
-      const ratio = (outer - inner) / Math.max(outer, 64);
-      ratios.push(ratio);
+      const outer = ringMean(warpedPixels, wW, wH, cx, cy, layout.outerR1, layout.outerR2);
+      ratios.push((outer - inner) / Math.max(outer, 64));
     }
 
-    const sorted = [...ratios].sort((a, b) => b - a);
-    const best = sorted[0];
-    const second = sorted[1] ?? 0;
+    // Find best and second-best inline — avoids array copy + sort
+    let best = -Infinity, second = -Infinity, bestIdx = 0;
+    for (let i = 0; i < ratios.length; i++) {
+      if (ratios[i] > best) { second = best; best = ratios[i]; bestIdx = i; }
+      else if (ratios[i] > second) { second = ratios[i]; }
+    }
     const gap = best - second;
-    const bestIdx = ratios.indexOf(best);
 
     if (best >= layout.minRatio && gap >= layout.minGap) {
       answers.push(layout.letters[bestIdx]);
@@ -560,52 +478,47 @@ export async function detectAndScan(
     return { found: false };
   }
 
-  // Marks found — continue straight to warp + bubble sampling
-  const [tl, tr, bl, br] = corners;
-  const p2f = (x: number, y: number) => OpenCV.createObject(ObjectType.Point2f, x, y);
-  const srcPts = OpenCV.createObject(ObjectType.Point2fVector, [
-    p2f(tl[0], tl[1]), p2f(tr[0], tr[1]), p2f(bl[0], bl[1]), p2f(br[0], br[1]),
-  ]);
-  const dstPts = OpenCV.createObject(ObjectType.Point2fVector, [
-    p2f(IDEAL_CORNERS[0][0], IDEAL_CORNERS[0][1]),
-    p2f(IDEAL_CORNERS[1][0], IDEAL_CORNERS[1][1]),
-    p2f(IDEAL_CORNERS[2][0], IDEAL_CORNERS[2][1]),
-    p2f(IDEAL_CORNERS[3][0], IDEAL_CORNERS[3][1]),
-  ]);
+  OpenCV.releaseBuffers([grayMat.id]);
 
-  const M = OpenCV.invoke("getPerspectiveTransform", srcPts, dstPts, DecompTypes.DECOMP_LU);
-  const warpedMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
-  const warpSize = OpenCV.createObject(ObjectType.Size, WARP_W, WARP_H);
-  const borderVal = OpenCV.createObject(ObjectType.Scalar, 0);
-  OpenCV.invoke(
-    "warpPerspective", grayMat, warpedMat, M, warpSize,
-    InterpolationFlags.INTER_LINEAR, BorderTypes.BORDER_CONSTANT, borderVal
-  );
-  OpenCV.releaseBuffers([grayMat.id, srcPts.id, dstPts.id, M.id, warpSize.id, borderVal.id]);
-
-  const { cols: wW, rows: wH, buffer: rawPixels } = OpenCV.matToBuffer(warpedMat, "uint8");
-  OpenCV.releaseBuffers([warpedMat.id]);
-
-  const warpedPixels = normalizePixels(rawPixels);
-
+  // Use PerspT to map bubble positions from warped space → original image space.
+  // This bypasses native warpPerspective (which produces all-black output in some
+  // react-native-fast-opencv versions) and is faster: no warp/normalize/matToBuffer.
   const layout = computeGridLayout(questions.length, choiceCount);
+
+  // Inverse perspective: warped sheet coords → original image coords
+  const idealFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
+  const detectedFlat = corners.flatMap(([x, y]) => [x, y]);
+  const invPersp = PerspT(idealFlat, detectedFlat);
+
+  // Scale sampling radii from warped space to original image space
+  const rectW = (corners[1][0] - corners[0][0] + corners[3][0] - corners[2][0]) / 2;
+  const rectH = (corners[2][1] - corners[0][1] + corners[3][1] - corners[1][1]) / 2;
+  const idealW = IDEAL_CORNERS[1][0] - IDEAL_CORNERS[0][0];
+  const idealH = IDEAL_CORNERS[2][1] - IDEAL_CORNERS[0][1];
+  const radiusScale = Math.min(rectW / idealW, rectH / idealH);
+  const adjInnerR = Math.max(3, Math.round(layout.innerR * radiusScale));
+  const adjOuterR1 = Math.max(adjInnerR + 1, Math.round(layout.outerR1 * radiusScale));
+  const adjOuterR2 = Math.max(adjOuterR1 + 1, Math.round(layout.outerR2 * radiusScale));
+
   const answers: string[] = [];
   const confidence: number[] = [];
   for (let q = 0; q < layout.questionCount; q++) {
     const ratios: number[] = [];
     for (let c = 0; c < layout.choiceCount; c++) {
       const { nx, ny } = layout.bubbleCenter(q, c);
-      const cx = nx * wW;
-      const cy = ny * wH;
-      const inner = ringMean(warpedPixels, wW, wH, cx, cy, 0, layout.innerR);
-      const outer = ringBright(warpedPixels, wW, wH, cx, cy, layout.outerR1, layout.outerR2);
+      // Map bubble center from warped space to original image coords
+      const [ix, iy] = invPersp.transform(nx * WARP_W, ny * WARP_H);
+      const inner = ringMean(pixels, W, H, ix, iy, 0, adjInnerR);
+      const outer = ringMean(pixels, W, H, ix, iy, adjOuterR1, adjOuterR2);
       ratios.push((outer - inner) / Math.max(outer, 64));
     }
-    const sorted = [...ratios].sort((a, b) => b - a);
-    const best = sorted[0];
-    const second = sorted[1] ?? 0;
+    // Find best and second-best inline — avoids array copy + sort
+    let best = -Infinity, second = -Infinity, bestIdx = 0;
+    for (let i = 0; i < ratios.length; i++) {
+      if (ratios[i] > best) { second = best; best = ratios[i]; bestIdx = i; }
+      else if (ratios[i] > second) { second = ratios[i]; }
+    }
     const gap = best - second;
-    const bestIdx = ratios.indexOf(best);
     if (best >= layout.minRatio && gap >= layout.minGap) {
       answers.push(layout.letters[bestIdx]);
       confidence.push(Math.min(1, gap / 0.4));

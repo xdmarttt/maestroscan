@@ -51,44 +51,38 @@ const MARK_Y = [
 const TARGET_SIZE = 64;
 
 // Orient → crop to frame area → resize. Returns base64 JPEG or null.
+// Optimized: single ImageManipulator call using photo dimensions from camera.
 async function cropToFrame(
   photoUri: string,
+  photoW: number,
+  photoH: number,
   framePos: { x: number; y: number; width: number; height: number },
   targetWidth: number,
   compress: number,
 ): Promise<string | null> {
-  // First pass: resize only to get dimensions (no redundant JPEG encode)
-  const step1 = await ImageManipulator.manipulateAsync(
-    photoUri,
-    [{ resize: { width: targetWidth } }],
-    { format: ImageManipulator.SaveFormat.JPEG },
-  );
-  let oriented = step1;
-  if (step1.width > step1.height) {
-    oriented = await ImageManipulator.manipulateAsync(
-      step1.uri,
-      [{ rotate: 90 }],
-      { format: ImageManipulator.SaveFormat.JPEG },
-    );
+  const allActions: ImageManipulator.Action[] = [];
+  let w = photoW;
+  let h = photoH;
+  if (w > h) {
+    allActions.push({ rotate: 90 });
+    [w, h] = [h, w];
   }
-  const imgPxPerPt = Math.min(
-    oriented.width / SCREEN_WIDTH,
-    oriented.height / SCREEN_HEIGHT,
-  );
-  const coverOffX = Math.max(0, (oriented.width - SCREEN_WIDTH * imgPxPerPt) / 2);
-  const coverOffY = Math.max(0, (oriented.height - SCREEN_HEIGHT * imgPxPerPt) / 2);
+  const imgPxPerPt = Math.min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT);
+  const coverOffX = Math.max(0, (w - SCREEN_WIDTH * imgPxPerPt) / 2);
+  const coverOffY = Math.max(0, (h - SCREEN_HEIGHT * imgPxPerPt) / 2);
   const MARGIN = 0.20;
   const ix0 = Math.round(Math.max(0, coverOffX + (framePos.x - framePos.width * MARGIN) * imgPxPerPt));
   const iy0 = Math.round(Math.max(0, coverOffY + (framePos.y - framePos.height * MARGIN) * imgPxPerPt));
-  const ix1 = Math.round(Math.min(oriented.width, coverOffX + (framePos.x + framePos.width * (1 + MARGIN)) * imgPxPerPt));
-  const iy1 = Math.round(Math.min(oriented.height, coverOffY + (framePos.y + framePos.height * (1 + MARGIN)) * imgPxPerPt));
+  const ix1 = Math.round(Math.min(w, coverOffX + (framePos.x + framePos.width * (1 + MARGIN)) * imgPxPerPt));
+  const iy1 = Math.round(Math.min(h, coverOffY + (framePos.y + framePos.height * (1 + MARGIN)) * imgPxPerPt));
   if (ix1 - ix0 <= 0 || iy1 - iy0 <= 0) return null;
+  allActions.push(
+    { crop: { originX: ix0, originY: iy0, width: ix1 - ix0, height: iy1 - iy0 } },
+    { resize: { width: targetWidth } },
+  );
   const result = await ImageManipulator.manipulateAsync(
-    oriented.uri,
-    [
-      { crop: { originX: ix0, originY: iy0, width: ix1 - ix0, height: iy1 - iy0 } },
-      { resize: { width: targetWidth } },
-    ],
+    photoUri,
+    allActions,
     { compress, format: ImageManipulator.SaveFormat.JPEG, base64: true },
   );
   return result.base64 ?? null;
@@ -110,48 +104,73 @@ export default function ScannerScreen() {
   const frameRef = useRef<View>(null);
   const isScanningRef = useRef(false);
   const isDetectingRef = useRef(false);
+  const framePosRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const detectLoopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Measure frame once and cache — position is static
+  const getFramePos = useCallback(async () => {
+    if (framePosRef.current) return framePosRef.current;
+    if (!frameRef.current) return null;
+    const pos = await new Promise<{ x: number; y: number; width: number; height: number }>(
+      (resolve) => {
+        (frameRef.current as any).measureInWindow(
+          (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
+        );
+      }
+    );
+    framePosRef.current = pos;
+    return pos;
+  }, []);
 
   // Single-pass detect+scan poll: captures a frame, runs detection and (if found)
   // full bubble scanning in one OpenCV session. Navigates to results instantly.
+  // Chain-based: schedules next poll immediately after current completes (no wasted interval).
   const runDetect = useCallback(async () => {
-    if (isScanningRef.current || isDetectingRef.current || !cameraRef.current || !frameRef.current) return;
-    if (questions.length === 0) return;
+    if (isScanningRef.current || isDetectingRef.current || !cameraRef.current || !frameRef.current) {
+      // Retry shortly if not ready yet
+      detectLoopRef.current = setTimeout(runDetect, 200);
+      return;
+    }
+    if (questions.length === 0) {
+      detectLoopRef.current = setTimeout(runDetect, 500);
+      return;
+    }
     isDetectingRef.current = true;
+    let navigating = false;
     try {
+      const t0 = Date.now();
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.7,
         base64: false,
         skipProcessing: false,
       });
-      const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
-        (resolve, reject) => {
-          if (!frameRef.current) return reject(new Error("no frame ref"));
-          (frameRef.current as any).measureInWindow(
-            (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
-          );
-        }
-      );
-      const b64 = await cropToFrame(photo.uri, framePos, 800, 0.7);
+      const t1 = Date.now();
+      const framePos = await getFramePos();
+      if (!framePos) { setSheetDetected(false); return; }
+      const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 800, 0.7);
+      const t2 = Date.now();
       if (!b64) { setSheetDetected(false); return; }
 
       const result = await detectAndScan(b64, questions, choiceCount);
+      const t3 = Date.now();
+      console.log(`[perf] capture=${t1-t0}ms crop=${t2-t1}ms scan=${t3-t2}ms total=${t3-t0}ms`);
       if (!result.found) { setSheetDetected(false); return; }
 
       // Sheet found and scanned in one pass — navigate immediately
+      navigating = true;
       setSheetDetected(true);
       isScanningRef.current = true;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsScanning(true);
       setScanDone(true);
-      await new Promise((r) => setTimeout(r, 300));
-
+      // Brief pause so user sees green feedback before navigation
+      await new Promise((r) => setTimeout(r, 200));
       router.push({
         pathname: "/results",
         params: {
           answers: JSON.stringify(result.answers),
           questions: JSON.stringify(questions),
           choiceCount: String(choiceCount),
-          debugImage: b64,
           corners: JSON.stringify(result.corners),
           imageSize: JSON.stringify(result.imageSize),
         },
@@ -160,21 +179,29 @@ export default function ScannerScreen() {
       // silent — detection errors don't block scanning
     } finally {
       isDetectingRef.current = false;
+      // Chain: schedule next detection unless we're navigating to results
+      // 300ms gap gives camera time to adjust exposure/focus between captures
+      if (!navigating) {
+        detectLoopRef.current = setTimeout(runDetect, 300);
+      }
     }
-  }, [questions, choiceCount]);
+  }, [questions, choiceCount, getFramePos]);
 
   // Reset scan state and start live detection every time this screen is focused
   useFocusEffect(
     useCallback(() => {
       isScanningRef.current = false;
+      isDetectingRef.current = false;
       setIsScanning(false);
       setScanDone(false);
       setScanError(null);
       setSheetDetected(false);
-      runDetect();
-      const detectInterval = setInterval(runDetect, 700);
+      framePosRef.current = null; // re-measure on focus (in case layout shifted)
+      // Start chain-based detection loop
+      detectLoopRef.current = setTimeout(runDetect, 100);
       return () => {
-        clearInterval(detectInterval);
+        if (detectLoopRef.current) clearTimeout(detectLoopRef.current);
+        detectLoopRef.current = null;
         setSheetDetected(false);
       };
     }, [runDetect])
@@ -262,7 +289,7 @@ export default function ScannerScreen() {
         base64: false,
         skipProcessing: false,
       });
-      const base64 = await cropToFrame(photo.uri, framePos, 1200, 0.85);
+      const base64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 1200, 0.85);
       if (!base64) throw new Error("Image capture failed");
 
       const data = await scanSheet(base64, questions, choiceCount);
@@ -280,7 +307,6 @@ export default function ScannerScreen() {
           answers: JSON.stringify(data.answers),
           questions: JSON.stringify(questions),
           choiceCount: String(choiceCount),
-          debugImage: base64,
           corners: "[]",
           imageSize: "[]",
         },

@@ -205,6 +205,10 @@ export default function ResultsScreen() {
       )
     : null;
 
+  // Scale overlay bubble size based on question density
+  const bubbleOverlaySize = Math.max(8, Math.min(28, Math.round(28 * (5 / Math.max(5, questions.length)) ** 0.5)));
+  const bubbleOverlayRadius = bubbleOverlaySize / 2;
+
   function bubbleToImagePct(q: number, c: number) {
     if (!perspTransform || !hasCorners) return null;
     const { nx, ny } = layout.bubbleCenter(q, c);
@@ -276,15 +280,22 @@ export default function ResultsScreen() {
                         {
                           left: pos.left,
                           top: pos.top,
+                          width: bubbleOverlaySize,
+                          height: bubbleOverlaySize,
+                          borderRadius: bubbleOverlayRadius,
+                          marginLeft: -bubbleOverlayRadius,
+                          marginTop: -bubbleOverlayRadius,
                           borderColor: isDetected ? "#00e676" : "#ff1744",
                           backgroundColor: isDetected ? "rgba(0,230,118,0.25)" : "transparent",
                         },
                       ]}
                     >
-                      <Text style={[
-                        styles.bubbleLabel,
-                        { color: isDetected ? "#00e676" : "#ff1744" },
-                      ]}>{letter}</Text>
+                      {bubbleOverlaySize >= 16 && (
+                        <Text style={[
+                          styles.bubbleLabel,
+                          { color: isDetected ? "#00e676" : "#ff1744", fontSize: Math.max(6, bubbleOverlaySize * 0.35) },
+                        ]}>{letter}</Text>
+                      )}
                     </View>
                   );
                 })
