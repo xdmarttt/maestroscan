@@ -159,18 +159,36 @@ function ringBright(
 }
 
 // Histogram normalization: percentile stretch (2–98), same as Python
+// Uses 256-bin histogram instead of sort — O(n) vs O(n log n)
 function normalizePixels(pixels: Uint8Array): Uint8Array {
-  // Sample every 4th pixel for speed
-  const sample: number[] = [];
-  for (let i = 0; i < pixels.length; i += 4) sample.push(pixels[i]);
-  sample.sort((a, b) => a - b);
-  const lo = sample[Math.floor(sample.length * 0.02)];
-  const hi = sample[Math.floor(sample.length * 0.98)];
+  const hist = new Uint32Array(256);
+  const step = 4; // sample every 4th pixel
+  let sampleCount = 0;
+  for (let i = 0; i < pixels.length; i += step) {
+    hist[pixels[i]]++;
+    sampleCount++;
+  }
+  // Find 2nd and 98th percentile via cumulative histogram
+  const loTarget = Math.floor(sampleCount * 0.02);
+  const hiTarget = Math.floor(sampleCount * 0.98);
+  let cum = 0;
+  let lo = 0;
+  let hi = 255;
+  for (let v = 0; v < 256; v++) {
+    cum += hist[v];
+    if (cum <= loTarget) lo = v;
+    if (cum < hiTarget) hi = v;
+  }
   if (hi <= lo) return pixels;
   const range = hi - lo;
+  // Precompute LUT for O(1) per-pixel mapping
+  const lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    lut[v] = Math.max(0, Math.min(255, Math.round(((v - lo) / range) * 255)));
+  }
   const out = new Uint8Array(pixels.length);
   for (let i = 0; i < pixels.length; i++) {
-    out[i] = Math.max(0, Math.min(255, Math.round(((pixels[i] - lo) / range) * 255)));
+    out[i] = lut[pixels[i]];
   }
   return out;
 }
