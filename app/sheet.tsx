@@ -18,7 +18,6 @@ import { computeGridLayout, SHEET_W, SHEET_H } from "@/lib/grid-layout";
 const MARK_SIZE = 20;
 const MARK_OFFSET_X = 9.6;
 const MARK_OFFSET_Y = 18;
-const CENTER_MARK_TOP = (SHEET_H - MARK_SIZE) / 2;
 
 export default function SheetScreen() {
   const insets = useSafeAreaInsets();
@@ -68,13 +67,11 @@ export default function SheetScreen() {
       >
         {/* Printable sheet */}
         <View style={styles.sheetContainer}>
-          {/* Registration marks — 4 corners + 2 center-side */}
+          {/* Registration marks — 4 corners */}
           <View style={[styles.regMark, { left: MARK_OFFSET_X, top: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { right: MARK_OFFSET_X, top: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { left: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { right: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
-          <View style={[styles.regMark, { left: MARK_OFFSET_X, top: CENTER_MARK_TOP }]} />
-          <View style={[styles.regMark, { right: MARK_OFFSET_X, top: CENTER_MARK_TOP }]} />
 
           {/* Title */}
           <Text style={styles.sheetTitle}>GradeSnap</Text>

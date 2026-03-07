@@ -25,7 +25,9 @@ import Animated, {
 import * as Haptics from "expo-haptics";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
-import { computeGridLayout } from "@/lib/grid-layout";
+import { computeGridLayout, WARP_W, WARP_H } from "@/lib/grid-layout";
+// @ts-ignore — no type definitions
+import PerspT from "perspective-transform";
 
 interface Question {
   id: number;
@@ -182,7 +184,44 @@ export default function ResultsScreen() {
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
   const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
   const debugImage = params.debugImage as string | undefined;
+  const corners: [number, number][] = JSON.parse((params.corners as string) || "[]");
+  const imageSize: [number, number] = JSON.parse((params.imageSize as string) || "[0,0]");
   const layout = computeGridLayout(questions.length, choiceCount);
+
+  // Build perspective transform: warped sheet coords → image pixel coords → percentage
+  // IDEAL_CORNERS in warped space (must match scan-offline.ts)
+  const IDEAL_CORNERS: [number, number][] = [
+    [(19.6 / 320) * WARP_W, (28.0 / 450) * WARP_H],
+    [(300.4 / 320) * WARP_W, (28.0 / 450) * WARP_H],
+    [(19.6 / 320) * WARP_W, (422.0 / 450) * WARP_H],
+    [(300.4 / 320) * WARP_W, (422.0 / 450) * WARP_H],
+  ];
+  const hasCorners = corners.length === 4 && imageSize[0] > 0;
+  // Maps warped space → image pixel space (inverse of the scan transform)
+  const perspTransform = hasCorners
+    ? PerspT(
+        IDEAL_CORNERS.flatMap(([x, y]) => [x, y]),
+        corners.flatMap(([x, y]) => [x, y]),
+      )
+    : null;
+
+  function bubbleToImagePct(q: number, c: number) {
+    if (!perspTransform || !hasCorners) return null;
+    const { nx, ny } = layout.bubbleCenter(q, c);
+    const [ix, iy] = perspTransform.transform(nx * WARP_W, ny * WARP_H);
+    return {
+      left: `${(ix / imageSize[0]) * 100}%` as const,
+      top: `${(iy / imageSize[1]) * 100}%` as const,
+    };
+  }
+
+  function cornerToImagePct(idx: number) {
+    if (!hasCorners) return null;
+    return {
+      left: `${(corners[idx][0] / imageSize[0]) * 100}%` as const,
+      top: `${(corners[idx][1] / imageSize[1]) * 100}%` as const,
+    };
+  }
 
   const score = answers.filter((a, i) => a === questions[i]?.correct).length;
   const percentage = Math.round((score / questions.length) * 100);
@@ -217,16 +256,17 @@ export default function ResultsScreen() {
         {debugImage && (
           <Animated.View entering={FadeInDown.duration(400)} style={styles.debugImageWrap}>
             <Text style={styles.debugImageLabel}>DEBUG: Captured Image</Text>
-            <View style={styles.debugImageContainer}>
+            <View style={[styles.debugImageContainer, hasCorners && { aspectRatio: imageSize[0] / imageSize[1] }]}>
               <Image
                 source={{ uri: `data:image/jpeg;base64,${debugImage}` }}
                 style={styles.debugImage}
                 resizeMode="contain"
               />
               {/* Bubble grid overlay — green = detected answer, red = other options */}
-              {Array.from({ length: layout.questionCount }).map((_, q) =>
+              {hasCorners && Array.from({ length: layout.questionCount }).map((_, q) =>
                 layout.letters.map((letter, c) => {
-                  const { nx, ny } = layout.bubbleCenter(q, c);
+                  const pos = bubbleToImagePct(q, c);
+                  if (!pos) return null;
                   const isDetected = answers[q] === letter;
                   return (
                     <View
@@ -234,8 +274,8 @@ export default function ResultsScreen() {
                       style={[
                         styles.bubbleCircle,
                         {
-                          left: `${nx * 100}%`,
-                          top: `${ny * 100}%`,
+                          left: pos.left,
+                          top: pos.top,
                           borderColor: isDetected ? "#00e676" : "#ff1744",
                           backgroundColor: isDetected ? "rgba(0,230,118,0.25)" : "transparent",
                         },
@@ -249,15 +289,12 @@ export default function ResultsScreen() {
                   );
                 })
               )}
-              {/* Registration mark indicators — corners */}
-              {[
-                { top: "6.2%" as const, left: "6.1%" as const },
-                { top: "6.2%" as const, left: "93.9%" as const },
-                { top: "93.8%" as const, left: "6.1%" as const },
-                { top: "93.8%" as const, left: "93.9%" as const },
-              ].map((pos, i) => (
-                <View key={`mark-${i}`} style={[styles.markIndicator, pos]} />
-              ))}
+              {/* Registration mark indicators — detected corners */}
+              {[0, 1, 2, 3].map((i) => {
+                const pos = cornerToImagePct(i);
+                if (!pos) return null;
+                return <View key={`mark-${i}`} style={[styles.markIndicator, pos]} />;
+              })}
             </View>
           </Animated.View>
         )}

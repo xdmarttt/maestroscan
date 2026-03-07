@@ -11,7 +11,6 @@ const REG_NORM = {
   BR: [300.4 / SHEET_W, 422 / SHEET_H] as [number, number],
 };
 
-const SAMPLE_RADIUS = 18; // px in warped space
 const FILL_THRESHOLD = 128; // brightness below this = filled bubble
 
 export interface ScanResult {
@@ -178,7 +177,7 @@ export async function processAnswerSheet(
         H,
         sx,
         sy,
-        SAMPLE_RADIUS
+        layout.innerR
       );
     }
 

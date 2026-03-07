@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GradeSnap Test Sheets</title>
+<style>
+  @media print {
+    .no-print { display: none !important; }
+    .sheet-page { page-break-after: always; }
+    .sheet-page:last-child { page-break-after: avoid; }
+    body { margin: 0; padding: 0; }
+  }
+  body {
+    font-family: Arial, sans-serif;
+    background: #f0f0f0;
+    margin: 0;
+    padding: 20px;
+  }
+  .no-print {
+    text-align: center;
+    margin-bottom: 20px;
+    background: #333;
+    color: #fff;
+    padding: 16px;
+    border-radius: 8px;
+  }
+  .no-print h1 { margin: 0 0 8px; }
+  .no-print p { margin: 4px 0; opacity: 0.8; font-size: 14px; }
+  .no-print button {
+    margin-top: 10px;
+    padding: 8px 24px;
+    font-size: 16px;
+    border: none;
+    border-radius: 6px;
+    background: #00c6ff;
+    color: #000;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .sheet-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 40px;
+  }
+  .sheet-label {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 6px;
+  }
+  .answer-key-label {
+    font-size: 11px;
+    color: #999;
+    margin-top: 8px;
+    max-width: 640px;
+    word-break: break-all;
+  }
+  canvas {
+    background: #fff;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  }
+</style>
+</head>
+<body>
+
+<div class="no-print">
+  <h1>GradeSnap Test Sheets</h1>
+  <p>10 / 20 / 30 / 40 / 50 / 60 / 70 / 80 / 90 / 100 questions (4 choices)</p>
+  <p>Each sheet has prefilled answers with <strong>exactly 2 wrong</strong> (marked in answer key below each sheet)</p>
+  <button onclick="window.print()">Print All Sheets</button>
+</div>
+
+<div id="sheets"></div>
+
+<script>
+// ── Replicate lib/grid-layout.ts exactly ────────────────────────────────────
+const SHEET_W = 320, SHEET_H = 450;
+const WARP_W = 800, WARP_H = 1125;
+const AREA_X0 = 0.10, AREA_X1 = 0.90;
+const AREA_Y0 = 0.15, AREA_Y1 = 0.88;
+const COL_GAP_NORM = 0.02;
+const LABEL_WIDTH_NORM = 0.04;
+
+function computeGridLayout(questionCount, choiceCount = 4) {
+  let questionColumns;
+  if (questionCount <= 10) questionColumns = 1;
+  else if (questionCount <= 25) questionColumns = 2;
+  else if (questionCount <= 50) questionColumns = 3;
+  else if (questionCount <= 75) questionColumns = 4;
+  else questionColumns = 5;
+
+  const questionsPerColumn = Math.ceil(questionCount / questionColumns);
+  const letters = choiceCount === 5 ? ["A","B","C","D","E"] : ["A","B","C","D"];
+
+  const areaW = AREA_X1 - AREA_X0;
+  const areaH = AREA_Y1 - AREA_Y0;
+  const colWidth = (areaW - COL_GAP_NORM * (questionColumns - 1)) / questionColumns;
+  const bubbleSpacingH = (colWidth - LABEL_WIDTH_NORM) / choiceCount;
+  const bubbleSpacingV = areaH / questionsPerColumn;
+
+  const MIN_BUBBLE_NORM = 10 / WARP_W;
+  const bubbleDiameterNorm = Math.max(MIN_BUBBLE_NORM, Math.min(bubbleSpacingH, bubbleSpacingV) * 0.72);
+
+  function bubbleCenter(q, c) {
+    const qCol = Math.floor(q / questionsPerColumn);
+    const qRow = q % questionsPerColumn;
+    const colStartX = AREA_X0 + qCol * (colWidth + COL_GAP_NORM);
+    const nx = colStartX + LABEL_WIDTH_NORM + (c + 0.5) * bubbleSpacingH;
+    const ny = AREA_Y0 + (qRow + 0.5) * bubbleSpacingV;
+    return { nx, ny };
+  }
+
+  function labelX(q) {
+    const qCol = Math.floor(q / questionsPerColumn);
+    return AREA_X0 + qCol * (colWidth + COL_GAP_NORM) + LABEL_WIDTH_NORM * 0.5;
+  }
+
+  return {
+    questionCount, choiceCount, letters, questionColumns, questionsPerColumn,
+    bubbleDiameterNorm, bubbleDiameterSheet: bubbleDiameterNorm * SHEET_W,
+    bubbleCenter, labelX, colWidth, bubbleSpacingH, bubbleSpacingV,
+  };
+}
+
+// ── Registration marks ──────────────────────────────────────────────────────
+const MARK_SIZE = 20;
+const MARKS = [
+  { x: 9.6,             y: 18 },                         // TL
+  { x: SHEET_W - 9.6 - MARK_SIZE, y: 18 },               // TR
+  { x: 9.6,             y: SHEET_H - 18 - MARK_SIZE },    // BL
+  { x: SHEET_W - 9.6 - MARK_SIZE, y: SHEET_H - 18 - MARK_SIZE }, // BR
+];
+
+// ── Generate answers with exactly 2 wrong ───────────────────────────────────
+function generateAnswers(questionCount, choiceCount) {
+  const letters = choiceCount === 5 ? ["A","B","C","D","E"] : ["A","B","C","D"];
+  // Deterministic "random" based on question count for reproducibility
+  const seed = questionCount * 7;
+  const correct = [];
+  for (let i = 0; i < questionCount; i++) {
+    correct.push(letters[(seed + i * 3) % choiceCount]);
+  }
+
+  // Student answers: copy correct, then make exactly 2 wrong
+  const student = [...correct];
+  // Wrong answer positions: ~30% and ~70% through the quiz
+  const wrong1 = Math.floor(questionCount * 0.3);
+  const wrong2 = Math.floor(questionCount * 0.7);
+  // Pick a different letter for the wrong answers
+  student[wrong1] = letters[(letters.indexOf(correct[wrong1]) + 1) % choiceCount];
+  student[wrong2] = letters[(letters.indexOf(correct[wrong2]) + 2) % choiceCount];
+
+  return { correct, student, wrongIndices: [wrong1, wrong2] };
+}
+
+// ── Draw a sheet on canvas ──────────────────────────────────────────────────
+function drawSheet(canvas, questionCount, choiceCount = 4) {
+  const SCALE = 2; // 2x for crisp printing
+  const W = SHEET_W * SCALE;
+  const H = SHEET_H * SCALE;
+  canvas.width = W;
+  canvas.height = H;
+  canvas.style.width = SHEET_W + 'px';
+  canvas.style.height = SHEET_H + 'px';
+
+  const ctx = canvas.getContext('2d');
+  const s = SCALE; // shorthand
+
+  // White background
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+
+  // Registration marks
+  ctx.fillStyle = '#000';
+  for (const m of MARKS) {
+    ctx.fillRect(m.x * s, m.y * s, MARK_SIZE * s, MARK_SIZE * s);
+  }
+
+  // Title — placed between top marks (y≈18) and bubble area (y≈67)
+  ctx.fillStyle = '#000';
+  ctx.font = `bold ${13 * s}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.fillText('GradeSnap', (SHEET_W / 2) * s, 32 * s);
+
+  ctx.fillStyle = '#444';
+  ctx.font = `${8 * s}px Arial`;
+  ctx.fillText(`Answer Sheet  \u2022  ${questionCount} Questions`, (SHEET_W / 2) * s, 44 * s);
+
+  // Compute layout
+  const layout = computeGridLayout(questionCount, choiceCount);
+  const bubbleD = layout.bubbleDiameterSheet;
+  const bubbleR = bubbleD / 2;
+
+  // Generate answers
+  const { correct, student, wrongIndices } = generateAnswers(questionCount, choiceCount);
+
+  // Draw column headers
+  ctx.fillStyle = '#000';
+  const headerFontSize = Math.max(7, Math.min(11, bubbleD * 0.55));
+  ctx.font = `bold ${headerFontSize * s}px Arial`;
+  ctx.textAlign = 'center';
+
+  for (let qCol = 0; qCol < layout.questionColumns; qCol++) {
+    const q0 = qCol * layout.questionsPerColumn;
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny } = layout.bubbleCenter(q0, c);
+      ctx.fillText(layout.letters[c], nx * SHEET_W * s, (ny * SHEET_H - bubbleD - 3) * s);
+    }
+  }
+
+  // Draw row labels + bubbles
+  const labelFontSize = Math.max(6, Math.min(11, bubbleD * 0.55));
+
+  for (let q = 0; q < questionCount; q++) {
+    // Row label
+    ctx.fillStyle = '#333';
+    ctx.font = `600 ${labelFontSize * s}px Arial`;
+    ctx.textAlign = 'right';
+    const lx = layout.labelX(q) * SHEET_W;
+    const { ny } = layout.bubbleCenter(q, 0);
+    ctx.fillText(String(q + 1), (lx + 2) * s, (ny * SHEET_H + labelFontSize * 0.35) * s);
+
+    // Bubbles
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny: by } = layout.bubbleCenter(q, c);
+      const cx = nx * SHEET_W * s;
+      const cy = by * SHEET_H * s;
+      const r = bubbleR * s;
+
+      const isFilled = student[q] === layout.letters[c];
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+
+      if (isFilled) {
+        // Filled bubble — dark fill like a student would mark
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fill();
+      } else {
+        // Empty bubble — just border
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 1.5 * s;
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Footer
+  ctx.fillStyle = '#666';
+  ctx.font = `italic ${9 * s}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.fillText('Fill circles completely with dark pencil or pen', (SHEET_W / 2) * s, (SHEET_H - 30) * s);
+
+  return { correct, student, wrongIndices };
+}
+
+// ── Generate all test sheets ────────────────────────────────────────────────
+const container = document.getElementById('sheets');
+const counts = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+for (const count of counts) {
+  const page = document.createElement('div');
+  page.className = 'sheet-page';
+
+  const label = document.createElement('div');
+  label.className = 'sheet-label no-print';
+  label.textContent = `${count} Questions \u2022 4 Choices (A\u2013D)`;
+  page.appendChild(label);
+
+  const canvas = document.createElement('canvas');
+  page.appendChild(canvas);
+
+  const { correct, student, wrongIndices } = drawSheet(canvas, count);
+
+  const keyLabel = document.createElement('div');
+  keyLabel.className = 'answer-key-label no-print';
+  const correctStr = correct.map((c, i) => `${i+1}:${c}`).join(' ');
+  const studentStr = student.map((s, i) => `${i+1}:${s}`).join(' ');
+  keyLabel.innerHTML = `
+    <strong>Correct:</strong> ${correctStr}<br>
+    <strong>Prefilled:</strong> ${studentStr}<br>
+    <strong>Wrong at Q${wrongIndices[0]+1} and Q${wrongIndices[1]+1}</strong>
+    (correct: ${correct[wrongIndices[0]]}\u2192filled: ${student[wrongIndices[0]]},
+     correct: ${correct[wrongIndices[1]]}\u2192filled: ${student[wrongIndices[1]]})
+  `;
+  page.appendChild(keyLabel);
+
+  container.appendChild(page);
+}
+</script>
+</body>
+</html>

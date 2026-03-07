@@ -502,7 +502,7 @@ export async function detectAndScan(
   base64: string,
   questions: QuizQuestion[],
   choiceCount: 4 | 5 = 4,
-): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[] }> {
+): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number] }> {
   if (!isNativeAvailable()) {
     // Server fallback: detect first, then scan if found
     try {
@@ -521,7 +521,8 @@ export async function detectAndScan(
       });
       if (!scanResp.ok) return { found: false };
       const scanData = await scanResp.json();
-      return { found: true, ...scanData };
+      const detectedCorners = detectData.corners || [[0,0],[0,0],[0,0],[0,0]];
+      return { found: true, ...scanData, corners: detectedCorners, imageSize: [0, 0] as [number, number] };
     } catch {
       return { found: false };
     }
@@ -596,7 +597,7 @@ export async function detectAndScan(
     }
   }
 
-  return { found: true, answers, confidence };
+  return { found: true, answers, confidence, corners, imageSize: [W, H] as [number, number] };
 }
 
 // ── Fallback: perspective-transform JS library ────────────────────────────────

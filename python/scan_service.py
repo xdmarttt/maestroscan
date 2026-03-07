@@ -80,9 +80,12 @@ def compute_grid_layout(question_count: int, choice_count: int = 4):
     REF_INNER_R, REF_OUTER_R1, REF_OUTER_R2 = 16, 36, 50
     actual_bubble_warped = bubble_diameter_norm * WARP_W
     scale = actual_bubble_warped / REF_BUBBLE_WARPED
+    h_spacing_px = bubble_spacing_h * WARP_W
+    v_spacing_px = bubble_spacing_v * WARP_H
+    max_outer_r = int(min(h_spacing_px, v_spacing_px) * 0.42)
     inner_r = max(4, round(REF_INNER_R * scale))
-    outer_r1 = max(8, round(REF_OUTER_R1 * scale))
-    outer_r2 = max(12, round(REF_OUTER_R2 * scale))
+    outer_r1 = max(inner_r + 2, min(round(REF_OUTER_R1 * scale), max_outer_r - 2))
+    outer_r2 = max(outer_r1 + 2, min(round(REF_OUTER_R2 * scale), max_outer_r))
 
     def bubble_center(q: int, c: int):
         q_col = q // questions_per_column

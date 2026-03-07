@@ -152,6 +152,8 @@ export default function ScannerScreen() {
           questions: JSON.stringify(questions),
           choiceCount: String(choiceCount),
           debugImage: b64,
+          corners: JSON.stringify(result.corners),
+          imageSize: JSON.stringify(result.imageSize),
         },
       });
     } catch {
@@ -182,12 +184,14 @@ export default function ScannerScreen() {
   const frameGlow = useSharedValue(0);
   const pulseScale = useSharedValue(1);
 
-  useEffect(() => {
-    loadQuiz().then((config) => {
-      setQuestions(config.questions);
-      setChoiceCount(config.choiceCount);
-    });
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadQuiz().then((config) => {
+        setQuestions(config.questions);
+        setChoiceCount(config.choiceCount);
+      });
+    }, [])
+  );
 
   useEffect(() => {
     scanLineY.value = withRepeat(
@@ -277,6 +281,8 @@ export default function ScannerScreen() {
           questions: JSON.stringify(questions),
           choiceCount: String(choiceCount),
           debugImage: base64,
+          corners: "[]",
+          imageSize: "[]",
         },
       });
     } catch (err: any) {

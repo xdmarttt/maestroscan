@@ -89,12 +89,16 @@ export function computeGridLayout(
     Math.min(bubbleSpacingH, bubbleSpacingV) * 0.72,
   );
 
-  // 4. Sampling radii: scale proportionally from reference
+  // 4. Sampling radii: scale proportionally from reference,
+  //    but cap outer ring so it never extends into adjacent bubbles.
   const actualBubbleWarped = bubbleDiameterNorm * WARP_W;
   const scale = actualBubbleWarped / REF_BUBBLE_WARPED;
+  const hSpacingPx = bubbleSpacingH * WARP_W;
+  const vSpacingPx = bubbleSpacingV * WARP_H;
+  const maxOuterR = Math.floor(Math.min(hSpacingPx, vSpacingPx) * 0.42);
   const innerR = Math.max(4, Math.round(REF_INNER_R * scale));
-  const outerR1 = Math.max(8, Math.round(REF_OUTER_R1 * scale));
-  const outerR2 = Math.max(12, Math.round(REF_OUTER_R2 * scale));
+  const outerR1 = Math.max(innerR + 2, Math.min(Math.round(REF_OUTER_R1 * scale), maxOuterR - 2));
+  const outerR2 = Math.max(outerR1 + 2, Math.min(Math.round(REF_OUTER_R2 * scale), maxOuterR));
 
   // 5. Position functions
   function bubbleCenter(q: number, c: number): { nx: number; ny: number } {
