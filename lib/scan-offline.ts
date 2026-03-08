@@ -120,39 +120,25 @@ interface Candidate {
 }
 
 /**
- * Adaptive threshold → morphological close → find contours →
- * filter by area, aspect ratio (≥0.60), solidity (≥0.82).
+ * Threshold a (possibly downscaled) blurred image, find contours,
+ * and collect square-ish dark blob candidates.
  *
- * Solidity = contourArea / (bw * bh):
- *   Solid square: ~1.0  → PASS
- *   Filled circle: π/4 ≈ 0.785 → FAIL  ← key discriminator
+ * Uses morph OPEN (erode→dilate) to break thin pixel bridges between
+ * marks and the desk background at sheet edges.
  */
-function findMarkCandidates(
-  blurred: ReturnType<typeof OpenCV.createObject>,
-  W: number,
-  H: number
-): Candidate[] {
-  // Block size must be odd and ≥3; match Python's formula
-  const bsz = Math.max(31, Math.round(W * 0.18) | 1);
-
-  const binary = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
-  OpenCV.invoke(
-    "adaptiveThreshold",
-    blurred,
-    binary,
-    255,
-    AdaptiveThresholdTypes.ADAPTIVE_THRESH_GAUSSIAN_C,
-    ThresholdTypes.THRESH_BINARY_INV,
-    bsz,
-    10
-  );
-
+function collectCandidatesFromBinary(
+  binary: ReturnType<typeof OpenCV.createObject>,
+  minArea: number,
+  maxArea: number,
+  existing: Candidate[],
+): void {
+  // Morph OPEN: break thin connections between marks and desk background
   const kernel = OpenCV.invoke(
     "getStructuringElement",
     MorphShapes.MORPH_RECT,
-    OpenCV.createObject(ObjectType.Size, 5, 5)
+    OpenCV.createObject(ObjectType.Size, 3, 3)
   );
-  OpenCV.invoke("morphologyEx", binary, binary, MorphTypes.MORPH_CLOSE, kernel);
+  OpenCV.invoke("morphologyEx", binary, binary, MorphTypes.MORPH_OPEN, kernel);
 
   const contours = OpenCV.createObject(ObjectType.MatVector);
   OpenCV.invoke(
@@ -164,16 +150,7 @@ function findMarkCandidates(
   );
 
   const { array: contourInfos } = OpenCV.toJSValue(contours);
-  const numContours = contourInfos.length;
-  const minArea = (W * 0.01) ** 2;
-  const maxArea = (W * 0.18) ** 2;
-  const candidates: Candidate[] = [];
-
-  // Track quadrant coverage — stop early once all 4 corners have candidates
-  const quadHits = [false, false, false, false]; // TL, TR, BL, BR
-  let quadsFilled = 0;
-
-  for (let i = 0; i < numContours; i++) {
+  for (let i = 0; i < contourInfos.length; i++) {
     const cnt = OpenCV.copyObjectFromVector(contours, i);
     const { value: area } = OpenCV.invoke("contourArea", cnt);
 
@@ -187,27 +164,77 @@ function findMarkCandidates(
     OpenCV.releaseBuffers([rectHandle.id, cnt.id]);
 
     if (bw < 2 || bh < 2) continue;
-    if (Math.min(bw, bh) / Math.max(bw, bh) < 0.6) continue;
-    if (area / (bw * bh) < 0.82) continue;
+    // Relaxed: perspective makes squares trapezoidal
+    if (Math.min(bw, bh) / Math.max(bw, bh) < 0.5) continue;
+    // Relaxed: printing artifacts + perspective lower solidity
+    if (area / (bw * bh) < 0.65) continue;
 
     const cx = x + bw / 2;
     const cy = y + bh / 2;
-    candidates.push({ cx, cy, area });
 
-    // Check which quadrant this falls in
-    const qi = (cy < H * 0.5 ? 0 : 2) + (cx < W * 0.5 ? 0 : 1);
-    if (!quadHits[qi]) { quadHits[qi] = true; quadsFilled++; }
-    // Once all 4 quadrants have at least one candidate, stop processing
-    if (quadsFilled === 4 && candidates.length >= 8) break;
+    // Dedup: skip if too close to an existing candidate
+    const isDup = existing.some(
+      (e) => Math.abs(e.cx - cx) < bw && Math.abs(e.cy - cy) < bh
+    );
+    if (!isDup) existing.push({ cx, cy, area });
   }
 
-  OpenCV.releaseBuffers([binary.id, kernel.id, contours.id]);
+  OpenCV.releaseBuffers([kernel.id, contours.id]);
+}
+
+/**
+ * Find mark candidates using two complementary threshold strategies:
+ * 1. Adaptive threshold — handles uneven lighting
+ * 2. Fixed low threshold — catches very dark marks regardless of context
+ *
+ * Both use morph OPEN to break mark↔background connections at sheet edges.
+ */
+function findMarkCandidates(
+  blurred: ReturnType<typeof OpenCV.createObject>,
+  W: number,
+): Candidate[] {
+  const minArea = (W * 0.008) ** 2;
+  const maxArea = (W * 0.15) ** 2;
+  const candidates: Candidate[] = [];
+
+  // Strategy 1: Adaptive threshold — moderate block size, higher C for selectivity
+  const bsz = Math.max(15, Math.round(W * 0.10) | 1);
+  const adaptBin = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
+  OpenCV.invoke(
+    "adaptiveThreshold",
+    blurred,
+    adaptBin,
+    255,
+    AdaptiveThresholdTypes.ADAPTIVE_THRESH_GAUSSIAN_C,
+    ThresholdTypes.THRESH_BINARY_INV,
+    bsz,
+    12
+  );
+  collectCandidatesFromBinary(adaptBin, minArea, maxArea, candidates);
+  OpenCV.releaseBuffers([adaptBin.id]);
+
+  // Strategy 2: Fixed low threshold — marks are the darkest blobs in the image.
+  // This catches marks that adaptive misses at sheet edges (where desk background
+  // pulls the local mean dark, making marks "not dark enough" relative to it).
+  const fixedBin = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
+  OpenCV.invoke(
+    "threshold",
+    blurred,
+    fixedBin,
+    80,
+    255,
+    ThresholdTypes.THRESH_BINARY_INV
+  );
+  collectCandidatesFromBinary(fixedBin, minArea, maxArea, candidates);
+  OpenCV.releaseBuffers([fixedBin.id]);
+
   return candidates;
 }
 
 /**
  * Find 4 corner registration marks.
- * Matches find_four_marks_strict() in Python.
+ * Downscales large images for speed and better threshold behavior,
+ * then maps results back to original coordinates.
  * Returns [TL, TR, BL, BR] or null.
  */
 function findFourMarks(
@@ -216,22 +243,47 @@ function findFourMarks(
   W: number,
   H: number
 ): [[number, number], [number, number], [number, number], [number, number]] | null {
+  // Downscale large images — improves speed and threshold robustness.
+  // Mark detection doesn't need full resolution.
+  const MAX_DIM = 800;
+  const needScale = Math.max(W, H) > MAX_DIM;
+  const scale = needScale ? MAX_DIM / Math.max(W, H) : 1;
+  const sW = Math.round(W * scale);
+  const sH = Math.round(H * scale);
+
+  let workMat = grayMat;
+  if (needScale) {
+    workMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
+    const dsize = OpenCV.createObject(ObjectType.Size, sW, sH);
+    OpenCV.invoke("resize", grayMat, workMat, dsize, 0, 0, InterpolationFlags.INTER_AREA);
+    OpenCV.releaseBuffers([dsize.id]);
+  }
+
   const blurred = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
   OpenCV.invoke(
     "GaussianBlur",
-    grayMat,
+    workMat,
     blurred,
     OpenCV.createObject(ObjectType.Size, 5, 5),
     0
   );
+  if (needScale) OpenCV.releaseBuffers([workMat.id]);
 
-  const candidates = findMarkCandidates(blurred, W, H);
+  const candidates = findMarkCandidates(blurred, sW);
   OpenCV.releaseBuffers([blurred.id]);
 
   if (candidates.length < 4) return null;
 
-  // One darkest candidate per quadrant
-  // Wider quadrant boundaries — marks slightly off-center still get picked up
+  // Scale candidates back to original image coordinates
+  if (needScale) {
+    const invScale = 1 / scale;
+    for (const c of candidates) {
+      c.cx *= invScale;
+      c.cy *= invScale;
+    }
+  }
+
+  // One darkest candidate per quadrant (using original-resolution pixels)
   const quads = [
     { nx0: 0.0, nx1: 0.55, ny0: 0.0, ny1: 0.55 }, // TL
     { nx0: 0.45, nx1: 1.0, ny0: 0.0, ny1: 0.55 }, // TR
@@ -266,7 +318,7 @@ function findFourMarks(
     [number, number],
   ];
 
-  // Geometric validation (matches Python)
+  // Geometric validation
   const rectW = (tr[0] - tl[0] + br[0] - bl[0]) / 2;
   const rectH = (bl[1] - tl[1] + br[1] - tr[1]) / 2;
   if (rectW < W * 0.10 || rectH < H * 0.10) return null;
@@ -282,11 +334,11 @@ function findFourMarks(
 // ── QR code decoding ─────────────────────────────────────────────────────────
 
 // QR scan region in normalized sheet coordinates (top-right area)
-// Covers QR at right=45, top=15, size=55 on 320×450 sheet
+// Covers QR at header bar area: ~x=0.65-0.90, y=0.09-0.20 on 320×450 sheet
 const QR_NX0 = 0.60;
 const QR_NX1 = 0.95;
-const QR_NY0 = 0.01;
-const QR_NY1 = 0.20;
+const QR_NY0 = 0.06;
+const QR_NY1 = 0.24;
 
 /**
  * Decode a QR code from the top-right region of the detected sheet.
@@ -305,9 +357,11 @@ function decodeSheetQR(
     const detectedFlat = corners.flatMap(([x, y]) => [x, y]);
     const invPersp = PerspT(idealFlat, detectedFlat);
 
-    // Rectified output size (in warped pixel space)
-    const outW = Math.round((QR_NX1 - QR_NX0) * WARP_W);
-    const outH = Math.round((QR_NY1 - QR_NY0) * WARP_H);
+    // Rectified output size — subsample by 2 to keep transform count low
+    // (~14K transforms instead of ~57K, still enough resolution for jsQR)
+    const SUB = 2;
+    const outW = Math.round((QR_NX1 - QR_NX0) * WARP_W / SUB);
+    const outH = Math.round((QR_NY1 - QR_NY0) * WARP_H / SUB);
     if (outW < 10 || outH < 10) return null;
 
     // Sample rectified QR region: for each output pixel, map through
@@ -318,7 +372,7 @@ function decodeSheetQR(
 
     for (let y = 0; y < outH; y++) {
       for (let x = 0; x < outW; x++) {
-        const [ix, iy] = invPersp.transform(wxBase + x, wyBase + y);
+        const [ix, iy] = invPersp.transform(wxBase + x * SUB, wyBase + y * SUB);
         const px = Math.round(ix);
         const py = Math.round(iy);
         gray[y * outW + x] =
@@ -347,7 +401,7 @@ function decodeSheetQR(
       rgba[j + 3] = 255;
     }
 
-    const result = jsQR(rgba, outW, outH, { inversionAttempts: "attemptBoth" });
+    const result = jsQR(rgba, outW, outH);
     console.log(`[QR] rectified=${outW}x${outH} decoded=${result?.data ?? 'null'}`);
     if (!result?.data) return null;
 
@@ -550,14 +604,14 @@ export async function detectAndScan(
     }
   }
 
-  // Single OpenCV session: decode → gray → detect → warp → sample
+  // Single OpenCV session: decode → gray → detect → sample
   const bgrMat = OpenCV.base64ToMat(base64);
   const grayMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
   OpenCV.invoke("cvtColor", bgrMat, grayMat, ColorConversionCodes.COLOR_BGR2GRAY);
   OpenCV.releaseBuffers([bgrMat.id]);
 
-  const { cols: W, rows: H, buffer: pixels } = OpenCV.matToBuffer(grayMat, "uint8");
-  const corners = findFourMarks(grayMat, pixels, W, H);
+  const { cols: W, rows: H, buffer: rawPixels } = OpenCV.matToBuffer(grayMat, "uint8");
+  const corners = findFourMarks(grayMat, rawPixels, W, H);
 
   if (!corners) {
     OpenCV.releaseBuffers([grayMat.id]);
@@ -566,12 +620,22 @@ export async function detectAndScan(
 
   OpenCV.releaseBuffers([grayMat.id]);
 
+  // Normalize pixel buffer to 0-255 — stabilizes ratios across exposure changes
+  let pMin = 255, pMax = 0;
+  for (let i = 0; i < rawPixels.length; i++) {
+    if (rawPixels[i] < pMin) pMin = rawPixels[i];
+    if (rawPixels[i] > pMax) pMax = rawPixels[i];
+  }
+  const pRange = pMax - pMin || 1;
+  const pixels = new Uint8Array(rawPixels.length);
+  for (let i = 0; i < rawPixels.length; i++) {
+    pixels[i] = Math.round(((rawPixels[i] - pMin) / pRange) * 255);
+  }
+
   // Decode QR code from sheet (non-blocking, returns null if no QR)
   const qrResult = decodeSheetQR(pixels, W, H, corners);
 
   // Use PerspT to map bubble positions from warped space → original image space.
-  // This bypasses native warpPerspective (which produces all-black output in some
-  // react-native-fast-opencv versions) and is faster: no warp/normalize/matToBuffer.
   const layout = computeGridLayout(questions.length, choiceCount);
 
   // Inverse perspective: warped sheet coords → original image coords
@@ -595,13 +659,11 @@ export async function detectAndScan(
     const ratios: number[] = [];
     for (let c = 0; c < layout.choiceCount; c++) {
       const { nx, ny } = layout.bubbleCenter(q, c);
-      // Map bubble center from warped space to original image coords
       const [ix, iy] = invPersp.transform(nx * WARP_W, ny * WARP_H);
       const inner = ringMean(pixels, W, H, ix, iy, 0, adjInnerR);
       const outer = ringMean(pixels, W, H, ix, iy, adjOuterR1, adjOuterR2);
       ratios.push((outer - inner) / Math.max(outer, 64));
     }
-    // Find best and second-best inline — avoids array copy + sort
     let best = -Infinity, second = -Infinity, bestIdx = 0;
     for (let i = 0; i < ratios.length; i++) {
       if (ratios[i] > best) { second = best; best = ratios[i]; bestIdx = i; }

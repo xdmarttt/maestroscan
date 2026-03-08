@@ -77,23 +77,32 @@ export default function SheetScreen() {
           <View style={[styles.regMark, { left: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { right: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
 
-          {/* Title */}
-          <Text style={styles.sheetTitle}>GradeSnap</Text>
-          <Text style={styles.sheetSubtitle}>
-            Answer Sheet  •  {questions.length} Question{questions.length !== 1 ? "s" : ""}
-          </Text>
+          {/* Header bar — bordered */}
+          <View style={styles.headerBar}>
+            <Text style={styles.brandText}>GRADESNAP</Text>
+            <Text style={styles.sheetTitle}>ANSWER SHEET</Text>
+            <Text style={styles.sheetSubtitle}>
+              {questions.length} Question{questions.length !== 1 ? "s" : ""} · {choiceCount} Choices
+            </Text>
 
-          {/* QR code — top-right area */}
-          {qrPayload ? (
-            <View style={styles.qrContainer}>
-              <QRCode value={qrPayload} size={55} level="M" />
-            </View>
-          ) : null}
+            {/* QR code inside header bar */}
+            {qrPayload ? (
+              <View style={styles.qrContainer}>
+                <View style={styles.qrBg}>
+                  <QRCode value={qrPayload} size={30} level="M" />
+                </View>
+              </View>
+            ) : null}
+          </View>
 
           {/* Student name line */}
           <Text style={styles.studentName}>
-            Name: {studentName || "___________________"}
+            Name: {studentName || "___________________________"}
           </Text>
+
+          {/* Divider */}
+          <View style={styles.divider} />
+          <Text style={styles.dividerLabel}>ANSWER SECTION</Text>
 
           {/* Per-column headers: A B C D [E] */}
           {Array.from({ length: layout.questionColumns }).map((_, qCol) => (
@@ -246,38 +255,71 @@ const styles = StyleSheet.create({
     height: MARK_SIZE,
     backgroundColor: "#000000",
   },
-  sheetTitle: {
+  headerBar: {
     position: "absolute",
-    top: 44,
-    left: 0,
-    right: 0,
-    textAlign: "center",
-    fontSize: 15,
+    top: 50,
+    left: 32,
+    right: 32,
+    height: 38,
+    backgroundColor: "#fff",
+    borderWidth: 1.5,
+    borderColor: "#000",
+    borderRadius: 2,
+    paddingLeft: 8,
+    paddingTop: 3,
+    justifyContent: "center",
+  },
+  brandText: {
+    fontSize: 5.5,
+    fontWeight: "700",
+    color: "#999",
+    letterSpacing: 0.5,
+  },
+  sheetTitle: {
+    fontSize: 13,
     fontWeight: "800",
     color: "#000",
-    letterSpacing: -0.3,
+    letterSpacing: -0.2,
+    marginTop: 1,
   },
   sheetSubtitle: {
-    position: "absolute",
-    top: 60,
-    left: 0,
-    right: 0,
-    textAlign: "center",
-    fontSize: 10,
-    color: "#444",
+    fontSize: 6,
+    color: "#555",
+    marginTop: 1,
   },
   qrContainer: {
     position: "absolute",
-    top: 15,
-    right: 45,
+    top: 3,
+    right: 4,
+  },
+  qrBg: {
+    backgroundColor: "#fff",
+    padding: 2,
+    borderRadius: 2,
   },
   studentName: {
     position: "absolute",
-    top: 74,
-    left: 40,
-    fontSize: 9,
+    top: 94,
+    left: 36,
+    fontSize: 7,
     color: "#333",
     fontWeight: "500",
+  },
+  divider: {
+    position: "absolute",
+    top: 110,
+    left: 32,
+    right: 32,
+    height: 1,
+    backgroundColor: "#ccc",
+  },
+  dividerLabel: {
+    position: "absolute",
+    top: 115,
+    left: 32,
+    fontSize: 7,
+    fontWeight: "700",
+    color: "#222",
   },
   colHeader: {
     position: "absolute",
@@ -305,8 +347,8 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     textAlign: "center",
-    fontSize: 9,
-    color: "#666",
+    fontSize: 7,
+    color: "#888",
     fontStyle: "italic",
   },
   keySection: {

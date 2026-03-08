@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GradeSnap — Test Sheets (Auto-Filled)</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<style>
+  @media print {
+    .no-print { display: none !important; }
+    .sheet-page { page-break-after: always; }
+    .sheet-page:last-child { page-break-after: avoid; }
+    body { margin: 0; padding: 0; background: #fff; }
+    canvas { box-shadow: none !important; }
+    @page { margin: 0.4in; }
+  }
+  body { font-family: Arial, sans-serif; background: #f0f0f0; margin: 0; padding: 20px; }
+  .no-print.header {
+    text-align: center; margin-bottom: 20px; background: #1a1a2e;
+    color: #fff; padding: 16px; border-radius: 8px; max-width: 700px; margin: 0 auto 20px;
+  }
+  .no-print.header h1 { margin: 0 0 4px; font-size: 20px; }
+  .no-print.header p { margin: 3px 0; opacity: 0.7; font-size: 13px; }
+  .no-print.header button {
+    margin-top: 10px; padding: 8px 24px; font-size: 14px;
+    border: none; border-radius: 6px; background: #4a6cf7; color: #fff;
+    font-weight: bold; cursor: pointer;
+  }
+  .sheet-page { display: flex; flex-direction: column; align-items: center; margin-bottom: 40px; }
+  .sheet-label { font-size: 12px; color: #666; margin-bottom: 6px; }
+  .answer-key { font-size: 10px; color: #999; margin-top: 8px; max-width: 700px; word-break: break-all; line-height: 1.6; }
+  canvas { background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.2); }
+</style>
+</head>
+<body>
+
+<div class="no-print header">
+  <h1>GradeSnap — Test Sheets (Auto-Filled)</h1>
+  <p>10 / 20 / 30 / 40 / 50 / 60 / 70 / 80 / 90 / 100 questions (4 choices)</p>
+  <p>Each sheet has prefilled answers with <strong>exactly 2 wrong</strong> (marked in key below)</p>
+  <button onclick="window.print()">Print All Sheets</button>
+</div>
+
+<div id="sheets"></div>
+
+<script>
+// ── Constants (MUST match lib/grid-layout.ts) ────────────────────────────────
+const SHEET_W = 320, SHEET_H = 450;
+const WARP_W = 800, WARP_H = 1125;
+const AREA_X0 = 0.10, AREA_X1 = 0.90;
+const AREA_Y0 = 0.33, AREA_Y1 = 0.88;
+const COL_GAP_NORM = 0.02;
+const LABEL_WIDTH_NORM = 0.04;
+
+function computeGridLayout(questionCount, choiceCount) {
+  choiceCount = choiceCount || 4;
+  let questionColumns;
+  if (questionCount <= 10) questionColumns = 1;
+  else if (questionCount <= 25) questionColumns = 2;
+  else if (questionCount <= 50) questionColumns = 3;
+  else if (questionCount <= 75) questionColumns = 4;
+  else questionColumns = 5;
+
+  const questionsPerColumn = Math.ceil(questionCount / questionColumns);
+  const letters = choiceCount === 5 ? ['A','B','C','D','E'] : ['A','B','C','D'];
+  const areaW = AREA_X1 - AREA_X0, areaH = AREA_Y1 - AREA_Y0;
+  const colWidth = (areaW - COL_GAP_NORM * (questionColumns - 1)) / questionColumns;
+  const bubbleSpacingH = (colWidth - LABEL_WIDTH_NORM) / choiceCount;
+  const bubbleSpacingV = areaH / questionsPerColumn;
+  const MIN_BUBBLE_NORM = 10 / WARP_W;
+  const bubbleDiameterNorm = Math.max(MIN_BUBBLE_NORM, Math.min(bubbleSpacingH, bubbleSpacingV) * 0.72);
+
+  function bubbleCenter(q, c) {
+    const qCol = Math.floor(q / questionsPerColumn);
+    const qRow = q % questionsPerColumn;
+    const colStartX = AREA_X0 + qCol * (colWidth + COL_GAP_NORM);
+    return {
+      nx: colStartX + LABEL_WIDTH_NORM + (c + 0.5) * bubbleSpacingH,
+      ny: AREA_Y0 + (qRow + 0.5) * bubbleSpacingV,
+    };
+  }
+  function labelX(q) {
+    const qCol = Math.floor(q / questionsPerColumn);
+    return AREA_X0 + qCol * (colWidth + COL_GAP_NORM) + LABEL_WIDTH_NORM * 0.5;
+  }
+
+  return {
+    questionCount, choiceCount, letters, questionColumns, questionsPerColumn,
+    bubbleDiameterNorm, bubbleDiameterSheet: bubbleDiameterNorm * SHEET_W,
+    colWidth, bubbleSpacingH, bubbleSpacingV, bubbleCenter, labelX,
+  };
+}
+
+// ── Registration marks ──────────────────────────────────────────────────────
+const MARK_SIZE = 20;
+const MARKS = [
+  { x: 9.6, y: 18 },
+  { x: SHEET_W - 9.6 - MARK_SIZE, y: 18 },
+  { x: 9.6, y: SHEET_H - 18 - MARK_SIZE },
+  { x: SHEET_W - 9.6 - MARK_SIZE, y: SHEET_H - 18 - MARK_SIZE },
+];
+
+// ── QR helper ───────────────────────────────────────────────────────────────
+function drawQR(ctx, text, x, y, size) {
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const mc = qr.getModuleCount();
+  const cs = size / mc;
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < mc; r++)
+    for (let c = 0; c < mc; c++)
+      if (qr.isDark(r, c))
+        ctx.fillRect(x + c * cs, y + r * cs, cs + 0.5, cs + 0.5);
+}
+
+// ── Generate answers with exactly 2 wrong ───────────────────────────────────
+function generateAnswers(questionCount, choiceCount) {
+  const letters = choiceCount === 5 ? ['A','B','C','D','E'] : ['A','B','C','D'];
+  const seed = questionCount * 7;
+  const correct = [];
+  for (let i = 0; i < questionCount; i++) correct.push(letters[(seed + i * 3) % choiceCount]);
+  const student = [...correct];
+  const wrong1 = Math.floor(questionCount * 0.3);
+  const wrong2 = Math.floor(questionCount * 0.7);
+  student[wrong1] = letters[(letters.indexOf(correct[wrong1]) + 1) % choiceCount];
+  student[wrong2] = letters[(letters.indexOf(correct[wrong2]) + 2) % choiceCount];
+  return { correct, student, wrongIndices: [wrong1, wrong2] };
+}
+
+// ── Student names ───────────────────────────────────────────────────────────
+function studentNameForCount(count) {
+  const names = ['Alice Johnson','Bob Smith','Carol Davis','David Lee','Emma Wilson',
+    'Frank Brown','Grace Kim','Henry Chen','Iris Patel','Jack Taylor'];
+  return names[count % names.length];
+}
+
+function formatDate() {
+  return new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// ── Draw a full sheet ───────────────────────────────────────────────────────
+function drawSheet(canvas, questionCount, choiceCount) {
+  choiceCount = choiceCount || 4;
+  const S = 2;
+  const W = SHEET_W * S, H = SHEET_H * S;
+  canvas.width = W; canvas.height = H;
+  canvas.style.width = SHEET_W + 'px';
+  canvas.style.height = SHEET_H + 'px';
+  const ctx = canvas.getContext('2d');
+
+  // White bg
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+
+  // Registration marks
+  ctx.fillStyle = '#000';
+  for (const m of MARKS) ctx.fillRect(m.x * S, m.y * S, MARK_SIZE * S, MARK_SIZE * S);
+
+  // Header bar (bordered, no fill)
+  const barY = 50, barH = 38, barX = 32, barW = SHEET_W - 64;
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5 * S;
+  ctx.strokeRect(barX * S, barY * S, barW * S, barH * S);
+
+  ctx.fillStyle = '#999';
+  ctx.font = `bold ${6 * S}px Arial`;
+  ctx.textAlign = 'left';
+  ctx.fillText('GRADESNAP', (barX + 8) * S, (barY + 10) * S);
+
+  ctx.fillStyle = '#000';
+  ctx.font = `bold ${14 * S}px Arial`;
+  ctx.fillText('ANSWER SHEET', (barX + 8) * S, (barY + 24) * S);
+
+  ctx.fillStyle = '#555';
+  ctx.font = `${6.5 * S}px Arial`;
+  ctx.fillText(`Mathematics 7 · Gr.7 – Einstein · Q3`, (barX + 8) * S, (barY + 32) * S);
+
+  ctx.font = `${5.5 * S}px Arial`;
+  ctx.fillText(`Test Quiz · ${questionCount} pts · ${formatDate()}`, (barX + 8) * S, (barY + 37) * S);
+
+  // QR code
+  const studentName = studentNameForCount(questionCount);
+  const quizId = 'test' + questionCount;
+  const qrPayload = `GS:${quizId}:${studentName}`;
+  const qrSize = 30, qrX = barX + barW - qrSize - 6, qrY = barY + 4;
+  drawQR(ctx, qrPayload, qrX * S, qrY * S, qrSize * S);
+
+  ctx.fillStyle = '#666';
+  ctx.font = `bold ${4 * S}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.fillText('SCAN TO GRADE', (qrX + qrSize / 2) * S, (barY + barH + 7) * S);
+  ctx.textAlign = 'left';
+
+  // Student info table
+  const tableY = 98, tableH = 28, tableX = barX, tableW = barW;
+  const col1W = tableW * 0.52, col2W = tableW * 0.24;
+  const rowH = tableH / 2;
+
+  ctx.strokeStyle = '#999'; ctx.lineWidth = 0.5 * S;
+  ctx.strokeRect(tableX * S, tableY * S, tableW * S, tableH * S);
+  ctx.beginPath(); ctx.moveTo(tableX * S, (tableY + rowH) * S); ctx.lineTo((tableX + tableW) * S, (tableY + rowH) * S); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo((tableX + col1W) * S, tableY * S); ctx.lineTo((tableX + col1W) * S, (tableY + tableH) * S); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo((tableX + col1W + col2W) * S, tableY * S); ctx.lineTo((tableX + col1W + col2W) * S, (tableY + tableH) * S); ctx.stroke();
+
+  ctx.fillStyle = '#000'; ctx.font = `bold ${4.5 * S}px Arial`;
+  const lp = 3;
+  ctx.fillText('NAME', (tableX + lp) * S, (tableY + 5) * S);
+  ctx.fillText('LRN', (tableX + col1W + lp) * S, (tableY + 5) * S);
+  ctx.fillText('DATE', (tableX + col1W + col2W + lp) * S, (tableY + 5) * S);
+  ctx.fillText('SECTION', (tableX + lp) * S, (tableY + rowH + 5) * S);
+  ctx.fillText('SCORE', (tableX + col1W + lp) * S, (tableY + rowH + 5) * S);
+  ctx.fillText('TEACHER', (tableX + col1W + col2W + lp) * S, (tableY + rowH + 5) * S);
+
+  ctx.fillStyle = '#222'; ctx.font = `${6 * S}px Arial`;
+  ctx.fillText(studentName, (tableX + lp) * S, (tableY + 12) * S);
+  ctx.fillText('123456789012', (tableX + col1W + lp) * S, (tableY + 12) * S);
+  ctx.fillText(formatDate(), (tableX + col1W + col2W + lp) * S, (tableY + 12) * S);
+  ctx.fillText('Einstein', (tableX + lp) * S, (tableY + rowH + 12) * S);
+  ctx.fillStyle = '#555';
+  ctx.fillText('_______ / ' + questionCount, (tableX + col1W + lp) * S, (tableY + rowH + 12) * S);
+  ctx.fillStyle = '#222';
+  ctx.fillText('Ms. Garcia', (tableX + col1W + col2W + lp) * S, (tableY + rowH + 12) * S);
+
+  // Divider
+  const divY = 124;
+  ctx.setLineDash([4 * S, 3 * S]); ctx.strokeStyle = '#999'; ctx.lineWidth = 0.8 * S;
+  ctx.beginPath(); ctx.moveTo(tableX * S, divY * S); ctx.lineTo((tableX + tableW) * S, divY * S); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#999'; ctx.font = `italic ${4.5 * S}px Arial`; ctx.textAlign = 'center';
+  ctx.fillText('D E T A C H   H E R E', (SHEET_W / 2) * S, (divY - 2) * S);
+  ctx.textAlign = 'left';
+
+  // Answer section header
+  ctx.fillStyle = '#222'; ctx.font = `bold ${7 * S}px Arial`;
+  ctx.fillText('ANSWER SECTION', tableX * S, 131 * S);
+  ctx.fillStyle = '#888'; ctx.font = `${4.5 * S}px Arial`;
+  ctx.fillText('Fill bubble completely · T/F: A = True  B = False', tableX * S, 136.5 * S);
+
+  // Bubble grid
+  const layout = computeGridLayout(questionCount, choiceCount);
+  const bubbleD = layout.bubbleDiameterSheet;
+  const bubbleR = bubbleD / 2;
+  const { correct, student, wrongIndices } = generateAnswers(questionCount, choiceCount);
+
+  // Column separators
+  ctx.strokeStyle = '#ddd'; ctx.lineWidth = 0.5 * S;
+  for (let qCol = 1; qCol < layout.questionColumns; qCol++) {
+    const sx = (AREA_X0 + qCol * (layout.colWidth + COL_GAP_NORM) - COL_GAP_NORM / 2) * SHEET_W * S;
+    ctx.beginPath(); ctx.moveTo(sx, (AREA_Y0 * SHEET_H - 4) * S); ctx.lineTo(sx, (AREA_Y1 * SHEET_H + 2) * S); ctx.stroke();
+  }
+
+  // Column headers
+  const hfs = Math.max(5, Math.min(8, bubbleD * 0.55));
+  ctx.fillStyle = '#222'; ctx.font = `bold ${hfs * S}px Arial`; ctx.textAlign = 'center';
+  for (let qCol = 0; qCol < layout.questionColumns; qCol++) {
+    const q0 = qCol * layout.questionsPerColumn;
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny } = layout.bubbleCenter(q0, c);
+      ctx.fillText(layout.letters[c], nx * SHEET_W * S, (ny * SHEET_H - bubbleD - 1) * S);
+    }
+  }
+
+  // Row labels + bubbles
+  const lfs = Math.max(5, Math.min(8, bubbleD * 0.55));
+  for (let q = 0; q < questionCount; q++) {
+    ctx.fillStyle = '#444'; ctx.font = `600 ${lfs * S}px Arial`; ctx.textAlign = 'right';
+    const lx = layout.labelX(q) * SHEET_W;
+    const { ny } = layout.bubbleCenter(q, 0);
+    ctx.fillText(String(q + 1), (lx + 2) * S, (ny * SHEET_H + lfs * 0.35) * S);
+
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny: by } = layout.bubbleCenter(q, c);
+      const cx = nx * SHEET_W * S, cy = by * SHEET_H * S, r = bubbleR * S;
+      const isFilled = student[q] === layout.letters[c];
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      if (isFilled) { ctx.fillStyle = '#1a1a1a'; ctx.fill(); }
+      else { ctx.strokeStyle = '#333'; ctx.lineWidth = 1.2 * S; ctx.stroke(); }
+    }
+  }
+
+  // Footer
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5 * S;
+  ctx.beginPath(); ctx.moveTo(tableX * S, (SHEET_H - 22) * S); ctx.lineTo((tableX + tableW) * S, (SHEET_H - 22) * S); ctx.stroke();
+  ctx.fillStyle = '#888'; ctx.font = `${4.5 * S}px Arial`; ctx.textAlign = 'center';
+  ctx.fillText(`GradeSnap · Q3 · ${formatDate()} · Test Quiz`, (SHEET_W / 2) * S, (SHEET_H - 16) * S);
+  ctx.font = `${4 * S}px Arial`;
+  ctx.fillText(`${questionCount} items · ${questionCount} total points · Do not reproduce without permission`, (SHEET_W / 2) * S, (SHEET_H - 10) * S);
+  ctx.textAlign = 'left';
+
+  return { correct, student, wrongIndices };
+}
+
+// ── Generate all sheets ─────────────────────────────────────────────────────
+const container = document.getElementById('sheets');
+const counts = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
+for (const count of counts) {
+  const page = document.createElement('div');
+  page.className = 'sheet-page';
+
+  const label = document.createElement('div');
+  label.className = 'sheet-label no-print';
+  const name = studentNameForCount(count);
+  label.textContent = `${count} Questions · 4 Choices · Student: ${name} · QR: GS:test${count}:${name}`;
+  page.appendChild(label);
+
+  const canvas = document.createElement('canvas');
+  page.appendChild(canvas);
+
+  const { correct, student, wrongIndices } = drawSheet(canvas, count);
+
+  const keyDiv = document.createElement('div');
+  keyDiv.className = 'answer-key no-print';
+  keyDiv.innerHTML = `
+    <strong>Correct:</strong> ${correct.map((c, i) => `${i+1}:${c}`).join(' ')}<br>
+    <strong>Filled:</strong> ${student.map((s, i) => `${i+1}:${s}`).join(' ')}<br>
+    <strong>Wrong at Q${wrongIndices[0]+1} and Q${wrongIndices[1]+1}</strong>
+    (${correct[wrongIndices[0]]}→${student[wrongIndices[0]]},
+     ${correct[wrongIndices[1]]}→${student[wrongIndices[1]]})
+  `;
+  page.appendChild(keyDiv);
+  container.appendChild(page);
+}
+</script>
+</body>
+</html>

@@ -174,6 +174,7 @@ export default function ScannerScreen() {
           choiceCount: String(choiceCount),
           corners: JSON.stringify(result.corners),
           imageSize: JSON.stringify(result.imageSize),
+          debugImage: b64,
           ...(result.studentName ? { studentName: result.studentName } : {}),
         },
       });

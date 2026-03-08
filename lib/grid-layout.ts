@@ -43,7 +43,7 @@ export interface GridLayout {
 // Bubble area boundaries (normalized, inside registration marks)
 const AREA_X0 = 0.10;
 const AREA_X1 = 0.90;
-const AREA_Y0 = 0.15;
+const AREA_Y0 = 0.33;
 const AREA_Y1 = 0.88;
 
 const COL_GAP_NORM = 0.02;
@@ -129,7 +129,7 @@ export function computeGridLayout(
     innerR,
     outerR1,
     outerR2,
-    minRatio: 0.08,
-    minGap: 0.04,
+    minRatio: 0.13,
+    minGap: 0.06,
   };
 }

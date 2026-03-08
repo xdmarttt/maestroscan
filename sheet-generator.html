@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GradeSnap — Sheet Generator</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', -apple-system, system-ui, sans-serif; background: #f0f0f0; }
+
+  @media print {
+    .no-print { display: none !important; }
+    body { background: #fff; margin: 0; padding: 0; }
+    .preview { padding: 0 !important; }
+    canvas { box-shadow: none !important; }
+    @page { margin: 0.4in; }
+  }
+
+  .app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    background: #1a1a2e;
+    color: #ccc;
+    padding: 24px 20px;
+    overflow-y: auto;
+    border-right: 1px solid #333;
+  }
+  .sidebar h1 { font-size: 18px; font-weight: 800; color: #fff; margin-bottom: 2px; }
+  .sidebar .tagline { font-size: 11px; color: #666; margin-bottom: 20px; }
+
+  .form-group { margin-bottom: 14px; }
+  .form-group label {
+    display: block; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; color: #888; margin-bottom: 4px;
+  }
+  .form-group input[type="text"],
+  .form-group input[type="number"],
+  .form-group input[type="date"] {
+    width: 100%; padding: 7px 10px; background: #16213e;
+    border: 1px solid #333; border-radius: 5px; color: #fff; font-size: 13px; outline: none;
+  }
+  .form-group input:focus { border-color: #4a6cf7; }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .radio-group { display: flex; gap: 12px; }
+  .radio-group label {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 13px; color: #ccc; text-transform: none; letter-spacing: 0; cursor: pointer;
+  }
+
+  .btn {
+    width: 100%; padding: 10px; border: none; border-radius: 6px;
+    font-size: 13px; font-weight: 700; cursor: pointer; margin-top: 6px;
+  }
+  .btn-primary { background: #4a6cf7; color: #fff; }
+  .btn-primary:hover { background: #3a5ce5; }
+  .btn-secondary { background: #2a2a3e; color: #aaa; border: 1px solid #444; }
+  .btn-secondary:hover { background: #333; }
+
+  .sep { border: none; border-top: 1px solid #333; margin: 18px 0; }
+
+  /* ── Preview ── */
+  .preview {
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 32px; background: #e8e8e8;
+  }
+  canvas { background: #fff; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+
+  @media (max-width: 768px) {
+    .app { grid-template-columns: 1fr; }
+    .preview { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar no-print">
+    <h1>GradeSnap</h1>
+    <p class="tagline">Answer Sheet Generator</p>
+
+    <div class="form-group">
+      <label>Quiz / Test Title</label>
+      <input type="text" id="quizTitle" value="Algebraic Expressions Quiz" placeholder="Quiz title">
+    </div>
+    <div class="row2">
+      <div class="form-group">
+        <label>Subject</label>
+        <input type="text" id="subject" value="Mathematics 7" placeholder="Subject">
+      </div>
+      <div class="form-group">
+        <label>Quarter / Term</label>
+        <input type="text" id="quarter" value="Q3" placeholder="Q3">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Grade · Section</label>
+      <input type="text" id="gradeSection" value="Gr.7 – Einstein" placeholder="Grade 7 – Section A">
+    </div>
+    <div class="form-group">
+      <label>Teacher</label>
+      <input type="text" id="teacher" value="Ms. Garcia" placeholder="Teacher name">
+    </div>
+
+    <hr class="sep">
+
+    <div class="row2">
+      <div class="form-group">
+        <label>Questions (5–100)</label>
+        <input type="number" id="questionCount" value="50" min="5" max="100">
+      </div>
+      <div class="form-group">
+        <label>Points</label>
+        <input type="number" id="totalPoints" value="50" min="1" max="999">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Choices per Question</label>
+      <div class="radio-group">
+        <label><input type="radio" name="choiceCount" value="4" checked> 4 (A–D)</label>
+        <label><input type="radio" name="choiceCount" value="5"> 5 (A–E)</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Date</label>
+      <input type="date" id="sheetDate" value="">
+    </div>
+
+    <hr class="sep">
+
+    <div class="form-group">
+      <label>Student Name (optional)</label>
+      <input type="text" id="studentName" placeholder="Leave blank for unfilled">
+    </div>
+    <div class="form-group">
+      <label>Student ID / LRN (optional)</label>
+      <input type="text" id="studentId" placeholder="e.g. 123456789012">
+    </div>
+
+    <hr class="sep">
+
+    <button class="btn btn-primary" onclick="generate()">Generate Sheet</button>
+    <button class="btn btn-secondary" onclick="window.print()">Print Sheet</button>
+  </aside>
+
+  <main class="preview">
+    <canvas id="sheet"></canvas>
+  </main>
+</div>
+
+<script>
+// ── Constants (MUST match lib/grid-layout.ts) ────────────────────────────────
+const SHEET_W = 320, SHEET_H = 450;
+const WARP_W = 800, WARP_H = 1125;
+const AREA_X0 = 0.10, AREA_X1 = 0.90;
+const AREA_Y0 = 0.33, AREA_Y1 = 0.88;
+const COL_GAP_NORM = 0.02;
+const LABEL_WIDTH_NORM = 0.04;
+
+// ── Grid layout (replicated from grid-layout.ts) ────────────────────────────
+function computeGridLayout(questionCount, choiceCount) {
+  choiceCount = choiceCount || 4;
+  let questionColumns;
+  if (questionCount <= 10) questionColumns = 1;
+  else if (questionCount <= 25) questionColumns = 2;
+  else if (questionCount <= 50) questionColumns = 3;
+  else if (questionCount <= 75) questionColumns = 4;
+  else questionColumns = 5;
+
+  const questionsPerColumn = Math.ceil(questionCount / questionColumns);
+  const letters = choiceCount === 5 ? ['A','B','C','D','E'] : ['A','B','C','D'];
+  const areaW = AREA_X1 - AREA_X0;
+  const areaH = AREA_Y1 - AREA_Y0;
+  const colWidth = (areaW - COL_GAP_NORM * (questionColumns - 1)) / questionColumns;
+  const bubbleSpacingH = (colWidth - LABEL_WIDTH_NORM) / choiceCount;
+  const bubbleSpacingV = areaH / questionsPerColumn;
+  const MIN_BUBBLE_NORM = 10 / WARP_W;
+  const bubbleDiameterNorm = Math.max(MIN_BUBBLE_NORM, Math.min(bubbleSpacingH, bubbleSpacingV) * 0.72);
+
+  function bubbleCenter(q, c) {
+    const qCol = Math.floor(q / questionsPerColumn);
+    const qRow = q % questionsPerColumn;
+    const colStartX = AREA_X0 + qCol * (colWidth + COL_GAP_NORM);
+    const nx = colStartX + LABEL_WIDTH_NORM + (c + 0.5) * bubbleSpacingH;
+    const ny = AREA_Y0 + (qRow + 0.5) * bubbleSpacingV;
+    return { nx, ny };
+  }
+
+  function labelX(q) {
+    const qCol = Math.floor(q / questionsPerColumn);
+    return AREA_X0 + qCol * (colWidth + COL_GAP_NORM) + LABEL_WIDTH_NORM * 0.5;
+  }
+
+  return {
+    questionCount, choiceCount, letters, questionColumns, questionsPerColumn,
+    bubbleDiameterNorm, bubbleDiameterSheet: bubbleDiameterNorm * SHEET_W,
+    colWidth, bubbleSpacingH, bubbleSpacingV, bubbleCenter, labelX,
+  };
+}
+
+// ── Registration marks ──────────────────────────────────────────────────────
+const MARK_SIZE = 20;
+const MARKS = [
+  { x: 9.6,                        y: 18 },
+  { x: SHEET_W - 9.6 - MARK_SIZE,  y: 18 },
+  { x: 9.6,                        y: SHEET_H - 18 - MARK_SIZE },
+  { x: SHEET_W - 9.6 - MARK_SIZE,  y: SHEET_H - 18 - MARK_SIZE },
+];
+
+// ── QR helper ───────────────────────────────────────────────────────────────
+function drawQR(ctx, text, x, y, size) {
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const mc = qr.getModuleCount();
+  const cs = size / mc;
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < mc; r++)
+    for (let c = 0; c < mc; c++)
+      if (qr.isDark(r, c))
+        ctx.fillRect(x + c * cs, y + r * cs, cs + 0.5, cs + 0.5);
+}
+
+// ── Date formatting ─────────────────────────────────────────────────────────
+function formatDate(dateStr) {
+  if (!dateStr) {
+    const d = new Date();
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// ── Main draw function ──────────────────────────────────────────────────────
+function drawSheet(canvas, opts) {
+  const S = 3; // 3x scale for print quality
+  const W = SHEET_W * S;
+  const H = SHEET_H * S;
+  canvas.width = W;
+  canvas.height = H;
+  canvas.style.width = SHEET_W + 'px';
+  canvas.style.height = SHEET_H + 'px';
+  const ctx = canvas.getContext('2d');
+
+  // White background
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Registration marks ──
+  ctx.fillStyle = '#000';
+  for (const m of MARKS) {
+    ctx.fillRect(m.x * S, m.y * S, MARK_SIZE * S, MARK_SIZE * S);
+  }
+
+  // ── Header bar (bordered, no fill) ──
+  const barY = 50, barH = 38;
+  const barX = 32, barW = SHEET_W - 64;
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5 * S;
+  ctx.strokeRect(barX * S, barY * S, barW * S, barH * S);
+
+  // Brand name
+  ctx.fillStyle = '#999';
+  ctx.font = `bold ${6 * S}px Arial`;
+  ctx.textAlign = 'left';
+  ctx.fillText('GRADESNAP', (barX + 8) * S, (barY + 10) * S);
+
+  // Title
+  ctx.fillStyle = '#000';
+  ctx.font = `bold ${14 * S}px Arial`;
+  ctx.fillText('ANSWER SHEET', (barX + 8) * S, (barY + 24) * S);
+
+  // Subject + Grade
+  ctx.fillStyle = '#555';
+  ctx.font = `${6.5 * S}px Arial`;
+  const subjectLine = [opts.subject, opts.gradeSection, opts.quarter].filter(Boolean).join(' · ');
+  ctx.fillText(subjectLine, (barX + 8) * S, (barY + 32) * S);
+
+  // Quiz title + points + date
+  ctx.font = `${5.5 * S}px Arial`;
+  const detailLine = [opts.quizTitle, opts.totalPoints ? opts.totalPoints + ' pts' : '', opts.dateStr].filter(Boolean).join(' · ');
+  ctx.fillText(detailLine, (barX + 8) * S, (barY + 37) * S);
+
+  // QR code in header bar
+  const qrSize = 30;
+  const qrX = barX + barW - qrSize - 6;
+  const qrY = barY + 4;
+  const qrPayload = opts.studentName
+    ? `GS:${opts.quizId || 'quiz'}:${opts.studentName}`
+    : `GS:${opts.quizId || 'quiz'}:${opts.quizTitle || 'sheet'}`;
+  drawQR(ctx, qrPayload, qrX * S, qrY * S, qrSize * S);
+
+  // "SCAN TO GRADE" label
+  ctx.fillStyle = '#666';
+  ctx.font = `bold ${4 * S}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.fillText('SCAN TO GRADE', (qrX + qrSize / 2) * S, (barY + barH + 7) * S);
+  ctx.textAlign = 'left';
+
+  // ── Student info table ──
+  const tableY = 98, tableH = 28;
+  const tableX = barX, tableW = barW;
+  const col1W = tableW * 0.52;
+  const col2W = tableW * 0.24;
+  const col3W = tableW * 0.24;
+  const rowH = tableH / 2;
+
+  ctx.strokeStyle = '#999';
+  ctx.lineWidth = 0.5 * S;
+
+  // Outer border
+  ctx.strokeRect(tableX * S, tableY * S, tableW * S, tableH * S);
+  // Horizontal middle line
+  ctx.beginPath();
+  ctx.moveTo(tableX * S, (tableY + rowH) * S);
+  ctx.lineTo((tableX + tableW) * S, (tableY + rowH) * S);
+  ctx.stroke();
+  // Vertical lines
+  ctx.beginPath();
+  ctx.moveTo((tableX + col1W) * S, tableY * S);
+  ctx.lineTo((tableX + col1W) * S, (tableY + tableH) * S);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo((tableX + col1W + col2W) * S, tableY * S);
+  ctx.lineTo((tableX + col1W + col2W) * S, (tableY + tableH) * S);
+  ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#000';
+  ctx.font = `bold ${4.5 * S}px Arial`;
+  const labelPad = 3;
+  ctx.fillText('NAME', (tableX + labelPad) * S, (tableY + 5) * S);
+  ctx.fillText('LRN', (tableX + col1W + labelPad) * S, (tableY + 5) * S);
+  ctx.fillText('DATE', (tableX + col1W + col2W + labelPad) * S, (tableY + 5) * S);
+  ctx.fillText('SECTION', (tableX + labelPad) * S, (tableY + rowH + 5) * S);
+  ctx.fillText('SCORE', (tableX + col1W + labelPad) * S, (tableY + rowH + 5) * S);
+  ctx.fillText('TEACHER', (tableX + col1W + col2W + labelPad) * S, (tableY + rowH + 5) * S);
+
+  // Values
+  ctx.fillStyle = '#222';
+  ctx.font = `${6 * S}px Arial`;
+  ctx.fillText(opts.studentName || '', (tableX + labelPad) * S, (tableY + 12) * S);
+  ctx.fillText(opts.studentId || '', (tableX + col1W + labelPad) * S, (tableY + 12) * S);
+  ctx.fillText(opts.dateStr || '', (tableX + col1W + col2W + labelPad) * S, (tableY + 12) * S);
+  ctx.fillText(opts.section || '', (tableX + labelPad) * S, (tableY + rowH + 12) * S);
+
+  // Score field: "______ / N"
+  ctx.fillStyle = '#555';
+  ctx.font = `${6 * S}px Arial`;
+  const scoreText = '_______ / ' + (opts.totalPoints || opts.questionCount);
+  ctx.fillText(scoreText, (tableX + col1W + labelPad) * S, (tableY + rowH + 12) * S);
+  ctx.fillStyle = '#222';
+  ctx.fillText(opts.teacher || '', (tableX + col1W + col2W + labelPad) * S, (tableY + rowH + 12) * S);
+
+  // ── Dashed divider ──
+  const divY = 124;
+  ctx.setLineDash([4 * S, 3 * S]);
+  ctx.strokeStyle = '#999';
+  ctx.lineWidth = 0.8 * S;
+  ctx.beginPath();
+  ctx.moveTo(tableX * S, divY * S);
+  ctx.lineTo((tableX + tableW) * S, divY * S);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#999';
+  ctx.font = `italic ${4.5 * S}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.fillText('D E T A C H   H E R E', (SHEET_W / 2) * S, (divY - 2) * S);
+  ctx.textAlign = 'left';
+
+  // ── Answer section header ──
+  ctx.fillStyle = '#222';
+  ctx.font = `bold ${7 * S}px Arial`;
+  ctx.fillText('ANSWER SECTION', (tableX) * S, 131 * S);
+
+  ctx.fillStyle = '#888';
+  ctx.font = `${4.5 * S}px Arial`;
+  const instr = 'Fill bubble completely · T/F: A = True  B = False';
+  ctx.fillText(instr, (tableX) * S, 136.5 * S);
+
+  // ── Bubble grid ──
+  const layout = computeGridLayout(opts.questionCount, opts.choiceCount);
+  const bubbleD = layout.bubbleDiameterSheet;
+  const bubbleR = bubbleD / 2;
+  const headerFontSize = Math.max(5, Math.min(8, bubbleD * 0.55));
+  const labelFontSize = Math.max(5, Math.min(8, bubbleD * 0.55));
+
+  // Column separator lines
+  ctx.strokeStyle = '#ddd';
+  ctx.lineWidth = 0.5 * S;
+  for (let qCol = 1; qCol < layout.questionColumns; qCol++) {
+    const colStartX = AREA_X0 + qCol * (layout.colWidth + COL_GAP_NORM) - COL_GAP_NORM / 2;
+    const sx = colStartX * SHEET_W * S;
+    ctx.beginPath();
+    ctx.moveTo(sx, (AREA_Y0 * SHEET_H - 4) * S);
+    ctx.lineTo(sx, (AREA_Y1 * SHEET_H + 2) * S);
+    ctx.stroke();
+  }
+
+  // Column headers
+  ctx.fillStyle = '#222';
+  ctx.font = `bold ${headerFontSize * S}px Arial`;
+  ctx.textAlign = 'center';
+  for (let qCol = 0; qCol < layout.questionColumns; qCol++) {
+    const q0 = qCol * layout.questionsPerColumn;
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny } = layout.bubbleCenter(q0, c);
+      ctx.fillText(layout.letters[c], nx * SHEET_W * S, (ny * SHEET_H - bubbleD - 1) * S);
+    }
+  }
+
+  // Row labels + bubbles
+  for (let q = 0; q < opts.questionCount; q++) {
+    // Row label
+    ctx.fillStyle = '#444';
+    ctx.font = `600 ${labelFontSize * S}px Arial`;
+    ctx.textAlign = 'right';
+    const lx = layout.labelX(q) * SHEET_W;
+    const { ny } = layout.bubbleCenter(q, 0);
+    ctx.fillText(String(q + 1), (lx + 2) * S, (ny * SHEET_H + labelFontSize * 0.35) * S);
+
+    // Bubbles
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const { nx, ny: by } = layout.bubbleCenter(q, c);
+      const cx = nx * SHEET_W * S;
+      const cy = by * SHEET_H * S;
+      const r = bubbleR * S;
+
+      // Check if this bubble should be filled
+      const isFilled = opts.filledAnswers && opts.filledAnswers[q] === layout.letters[c];
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      if (isFilled) {
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1.2 * S;
+        ctx.stroke();
+      }
+    }
+  }
+
+  // ── Footer ──
+  // Accent line
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1.5 * S;
+  ctx.beginPath();
+  ctx.moveTo(tableX * S, (SHEET_H - 22) * S);
+  ctx.lineTo((tableX + tableW) * S, (SHEET_H - 22) * S);
+  ctx.stroke();
+
+  ctx.fillStyle = '#888';
+  ctx.font = `${4.5 * S}px Arial`;
+  ctx.textAlign = 'center';
+  const footerParts = ['GradeSnap', opts.quarter, opts.dateStr, opts.quizTitle].filter(Boolean);
+  ctx.fillText(footerParts.join(' · '), (SHEET_W / 2) * S, (SHEET_H - 16) * S);
+  ctx.font = `${4 * S}px Arial`;
+  ctx.fillText(opts.questionCount + ' items · ' + (opts.totalPoints || opts.questionCount) + ' total points · Do not reproduce without permission',
+    (SHEET_W / 2) * S, (SHEET_H - 10) * S);
+
+  ctx.textAlign = 'left';
+}
+
+// ── Generate from form ──────────────────────────────────────────────────────
+function generate() {
+  const canvas = document.getElementById('sheet');
+  const questionCount = Math.min(100, Math.max(5, parseInt(document.getElementById('questionCount').value) || 10));
+  const choiceCount = parseInt(document.querySelector('input[name="choiceCount"]:checked').value);
+  const dateVal = document.getElementById('sheetDate').value;
+  const quizId = 'q' + Date.now().toString(36).slice(-6);
+
+  drawSheet(canvas, {
+    quizTitle: document.getElementById('quizTitle').value,
+    subject: document.getElementById('subject').value,
+    gradeSection: document.getElementById('gradeSection').value,
+    quarter: document.getElementById('quarter').value,
+    teacher: document.getElementById('teacher').value,
+    questionCount,
+    choiceCount,
+    totalPoints: document.getElementById('totalPoints').value,
+    studentName: document.getElementById('studentName').value,
+    studentId: document.getElementById('studentId').value,
+    section: document.getElementById('gradeSection').value,
+    dateStr: formatDate(dateVal),
+    quizId,
+  });
+}
+
+// Set default date
+document.getElementById('sheetDate').value = new Date().toISOString().split('T')[0];
+// Initial render
+generate();
+
+// Auto-regenerate on input change
+document.querySelectorAll('.sidebar input').forEach(el => {
+  el.addEventListener('input', generate);
+  el.addEventListener('change', generate);
+});
+</script>
+</body>
+</html>
