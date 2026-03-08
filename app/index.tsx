@@ -70,7 +70,7 @@ async function cropToFrame(
   const imgPxPerPt = Math.min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT);
   const coverOffX = Math.max(0, (w - SCREEN_WIDTH * imgPxPerPt) / 2);
   const coverOffY = Math.max(0, (h - SCREEN_HEIGHT * imgPxPerPt) / 2);
-  const MARGIN = 0.20;
+  const MARGIN = 0.08;
   const ix0 = Math.round(Math.max(0, coverOffX + (framePos.x - framePos.width * MARGIN) * imgPxPerPt));
   const iy0 = Math.round(Math.max(0, coverOffY + (framePos.y - framePos.height * MARGIN) * imgPxPerPt));
   const ix1 = Math.round(Math.min(w, coverOffX + (framePos.x + framePos.width * (1 + MARGIN)) * imgPxPerPt));
@@ -174,7 +174,7 @@ export default function ScannerScreen() {
           choiceCount: String(choiceCount),
           corners: JSON.stringify(result.corners),
           imageSize: JSON.stringify(result.imageSize),
-          debugImage: b64,
+          // debugImage: b64,
           ...(result.studentName ? { studentName: result.studentName } : {}),
         },
       });

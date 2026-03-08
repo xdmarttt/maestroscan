@@ -166,8 +166,8 @@ function collectCandidatesFromBinary(
     if (bw < 2 || bh < 2) continue;
     // Relaxed: perspective makes squares trapezoidal
     if (Math.min(bw, bh) / Math.max(bw, bh) < 0.5) continue;
-    // Relaxed: printing artifacts + perspective lower solidity
-    if (area / (bw * bh) < 0.65) continue;
+    // Solidity: marks are solid squares (~1.0), reject irregular shapes
+    if (area / (bw * bh) < 0.75) continue;
 
     const cx = x + bw / 2;
     const cy = y + bh / 2;
@@ -221,7 +221,7 @@ function findMarkCandidates(
     "threshold",
     blurred,
     fixedBin,
-    80,
+    50,
     255,
     ThresholdTypes.THRESH_BINARY_INV
   );
@@ -292,6 +292,7 @@ function findFourMarks(
   ];
 
   const corners: [number, number][] = [];
+  const cornerDarkness: number[] = [];
   for (const { nx0, nx1, ny0, ny1 } of quads) {
     const inQ = candidates.filter(
       (c) => c.cx >= nx0 * W && c.cx < nx1 * W && c.cy >= ny0 * H && c.cy < ny1 * H
@@ -309,6 +310,13 @@ function findFourMarks(
       }
     }
     corners.push([best.cx, best.cy]);
+    cornerDarkness.push(bestDark);
+  }
+
+  // All 4 corners must be genuinely dark — printed black marks should be < 90.
+  // This prevents false positives from random dark objects in non-sheet scenes.
+  for (const d of cornerDarkness) {
+    if (d > 90) return null;
   }
 
   const [tl, tr, bl, br] = corners as [
@@ -321,10 +329,12 @@ function findFourMarks(
   // Geometric validation
   const rectW = (tr[0] - tl[0] + br[0] - bl[0]) / 2;
   const rectH = (bl[1] - tl[1] + br[1] - tr[1]) / 2;
-  if (rectW < W * 0.10 || rectH < H * 0.10) return null;
+  // Detected sheet must fill at least 25% of the image
+  if (rectW < W * 0.25 || rectH < H * 0.25) return null;
 
+  // Sheet aspect ratio is 320:450 ≈ 0.71 — allow 0.4 to 1.5 for perspective
   const aspect = rectH / (rectW + 1e-6);
-  if (aspect < 0.5 || aspect > 4.0) return null;
+  if (aspect < 0.4 || aspect > 1.5) return null;
 
   if (tl[0] >= tr[0] || bl[0] >= br[0] || tl[1] >= bl[1] || tr[1] >= br[1]) return null;
 
@@ -334,11 +344,11 @@ function findFourMarks(
 // ── QR code decoding ─────────────────────────────────────────────────────────
 
 // QR scan region in normalized sheet coordinates (top-right area)
-// Covers QR at header bar area: ~x=0.65-0.90, y=0.09-0.20 on 320×450 sheet
-const QR_NX0 = 0.60;
+// Header bar at y=50-88 on 320×450, QR at top-right corner of header
+const QR_NX0 = 0.58;
 const QR_NX1 = 0.95;
-const QR_NY0 = 0.06;
-const QR_NY1 = 0.24;
+const QR_NY0 = 0.08;
+const QR_NY1 = 0.26;
 
 /**
  * Decode a QR code from the top-right region of the detected sheet.
@@ -357,11 +367,9 @@ function decodeSheetQR(
     const detectedFlat = corners.flatMap(([x, y]) => [x, y]);
     const invPersp = PerspT(idealFlat, detectedFlat);
 
-    // Rectified output size — subsample by 2 to keep transform count low
-    // (~14K transforms instead of ~57K, still enough resolution for jsQR)
-    const SUB = 2;
-    const outW = Math.round((QR_NX1 - QR_NX0) * WARP_W / SUB);
-    const outH = Math.round((QR_NY1 - QR_NY0) * WARP_H / SUB);
+    // Full resolution rectified output for reliable QR decoding
+    const outW = Math.round((QR_NX1 - QR_NX0) * WARP_W);
+    const outH = Math.round((QR_NY1 - QR_NY0) * WARP_H);
     if (outW < 10 || outH < 10) return null;
 
     // Sample rectified QR region: for each output pixel, map through
@@ -372,7 +380,7 @@ function decodeSheetQR(
 
     for (let y = 0; y < outH; y++) {
       for (let x = 0; x < outW; x++) {
-        const [ix, iy] = invPersp.transform(wxBase + x * SUB, wyBase + y * SUB);
+        const [ix, iy] = invPersp.transform(wxBase + x, wyBase + y);
         const px = Math.round(ix);
         const py = Math.round(iy);
         gray[y * outW + x] =
@@ -632,8 +640,8 @@ export async function detectAndScan(
     pixels[i] = Math.round(((rawPixels[i] - pMin) / pRange) * 255);
   }
 
-  // Decode QR code from sheet (non-blocking, returns null if no QR)
-  const qrResult = decodeSheetQR(pixels, W, H, corners);
+  // Decode QR code from sheet — use rawPixels (QR decoder does its own normalization)
+  const qrResult = decodeSheetQR(rawPixels, W, H, corners);
 
   // Use PerspT to map bubble positions from warped space → original image space.
   const layout = computeGridLayout(questions.length, choiceCount);
