@@ -183,6 +183,7 @@ export default function ResultsScreen() {
   const answers: string[] = JSON.parse((params.answers as string) || "[]");
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
   const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
+  const studentName = (params.studentName as string) || "";
   const debugImage = params.debugImage as string | undefined;
   const corners: [number, number][] = JSON.parse((params.corners as string) || "[]");
   const imageSize: [number, number] = JSON.parse((params.imageSize as string) || "[0,0]");
@@ -311,6 +312,12 @@ export default function ResultsScreen() {
         )}
 
         <Animated.View entering={FadeInDown.duration(400).delay(100)} style={styles.scoreSection}>
+          {studentName ? (
+            <View style={styles.studentBanner}>
+              <Ionicons name="person" size={14} color={Colors.accent} />
+              <Text style={styles.studentBannerText}>{studentName}</Text>
+            </View>
+          ) : null}
           <View style={styles.scoreSectionTop}>
             <View>
               <Text style={styles.scoreLabel}>Total Score</Text>
@@ -421,6 +428,22 @@ const styles = StyleSheet.create({
     gap: 20,
     borderWidth: 1,
     borderColor: Colors.border,
+  },
+  studentBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: Colors.accentDim,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: Colors.accent,
+  },
+  studentBannerText: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.accent,
   },
   scoreSectionTop: {
     flexDirection: "row",

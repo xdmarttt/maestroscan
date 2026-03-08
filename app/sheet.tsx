@@ -10,6 +10,7 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import QRCode from "react-qr-code";
 import Colors from "@/constants/colors";
 import { QuizQuestion, DEFAULT_QUIZ } from "@/lib/quiz-storage";
 import { computeGridLayout, SHEET_W, SHEET_H } from "@/lib/grid-layout";
@@ -21,7 +22,7 @@ const MARK_OFFSET_Y = 18;
 
 export default function SheetScreen() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ questions?: string; choiceCount?: string }>();
+  const params = useLocalSearchParams<{ questions?: string; choiceCount?: string; studentName?: string; quizId?: string }>();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
@@ -33,6 +34,9 @@ export default function SheetScreen() {
   }
 
   const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
+  const studentName = params.studentName || "";
+  const quizId = params.quizId || "";
+  const qrPayload = studentName && quizId ? `GS:${quizId}:${studentName}` : "";
   const layout = computeGridLayout(questions.length, choiceCount);
 
   const bubbleD = layout.bubbleDiameterSheet;
@@ -77,6 +81,18 @@ export default function SheetScreen() {
           <Text style={styles.sheetTitle}>GradeSnap</Text>
           <Text style={styles.sheetSubtitle}>
             Answer Sheet  •  {questions.length} Question{questions.length !== 1 ? "s" : ""}
+          </Text>
+
+          {/* QR code — top-right area */}
+          {qrPayload ? (
+            <View style={styles.qrContainer}>
+              <QRCode value={qrPayload} size={55} level="M" />
+            </View>
+          ) : null}
+
+          {/* Student name line */}
+          <Text style={styles.studentName}>
+            Name: {studentName || "___________________"}
           </Text>
 
           {/* Per-column headers: A B C D [E] */}
@@ -232,7 +248,7 @@ const styles = StyleSheet.create({
   },
   sheetTitle: {
     position: "absolute",
-    top: 52,
+    top: 44,
     left: 0,
     right: 0,
     textAlign: "center",
@@ -243,12 +259,25 @@ const styles = StyleSheet.create({
   },
   sheetSubtitle: {
     position: "absolute",
-    top: 72,
+    top: 60,
     left: 0,
     right: 0,
     textAlign: "center",
     fontSize: 10,
     color: "#444",
+  },
+  qrContainer: {
+    position: "absolute",
+    top: 15,
+    right: 45,
+  },
+  studentName: {
+    position: "absolute",
+    top: 74,
+    left: 40,
+    fontSize: 9,
+    color: "#333",
+    fontWeight: "500",
   },
   colHeader: {
     position: "absolute",

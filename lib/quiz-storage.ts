@@ -10,14 +10,25 @@ export interface QuizQuestion {
 }
 
 export interface QuizConfig {
+  id: string;
   questions: QuizQuestion[];
   choiceCount: 4 | 5;
   createdAt: number;
 }
 
+export interface StudentRoster {
+  students: string[];
+}
+
 const QUIZ_KEY = "gradesnap:quiz_config";
+const ROSTER_KEY = "gradesnap:student_roster";
+
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
 
 export const DEFAULT_QUIZ: QuizConfig = {
+  id: generateId(),
   choiceCount: 4,
   questions: [
     {
@@ -59,8 +70,9 @@ export async function loadQuiz(): Promise<QuizConfig> {
     const raw = await AsyncStorage.getItem(QUIZ_KEY);
     if (!raw) return DEFAULT_QUIZ;
     const parsed = JSON.parse(raw) as QuizConfig;
-    // Migration: old configs lack choiceCount
+    // Migration: old configs lack choiceCount or id
     if (!parsed.choiceCount) parsed.choiceCount = 4;
+    if (!parsed.id) parsed.id = generateId();
     return parsed;
   } catch {
     return DEFAULT_QUIZ;
@@ -69,4 +81,18 @@ export async function loadQuiz(): Promise<QuizConfig> {
 
 export async function saveQuiz(config: QuizConfig): Promise<void> {
   await AsyncStorage.setItem(QUIZ_KEY, JSON.stringify(config));
+}
+
+export async function loadRoster(): Promise<StudentRoster> {
+  try {
+    const raw = await AsyncStorage.getItem(ROSTER_KEY);
+    if (!raw) return { students: [] };
+    return JSON.parse(raw) as StudentRoster;
+  } catch {
+    return { students: [] };
+  }
+}
+
+export async function saveRoster(roster: StudentRoster): Promise<void> {
+  await AsyncStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
 }

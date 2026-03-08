@@ -157,6 +157,7 @@ export default function ScannerScreen() {
       if (!result.found) { setSheetDetected(false); return; }
 
       // Sheet found and scanned in one pass — navigate immediately
+      console.log(`[scan] found! student=${result.studentName ?? 'none'} quizId=${result.quizId ?? 'none'}`);
       navigating = true;
       setSheetDetected(true);
       isScanningRef.current = true;
@@ -173,6 +174,7 @@ export default function ScannerScreen() {
           choiceCount: String(choiceCount),
           corners: JSON.stringify(result.corners),
           imageSize: JSON.stringify(result.imageSize),
+          ...(result.studentName ? { studentName: result.studentName } : {}),
         },
       });
     } catch {

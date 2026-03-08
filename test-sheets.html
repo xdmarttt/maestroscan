@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>GradeSnap Test Sheets</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   @media print {
     .no-print { display: none !important; }
@@ -153,6 +154,30 @@ function generateAnswers(questionCount, choiceCount) {
   return { correct, student, wrongIndices: [wrong1, wrong2] };
 }
 
+// ── Draw QR code on canvas ──────────────────────────────────────────────────
+function drawQRCode(ctx, text, x, y, size) {
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+  const moduleCount = qr.getModuleCount();
+  const cellSize = size / moduleCount;
+  for (let row = 0; row < moduleCount; row++) {
+    for (let col = 0; col < moduleCount; col++) {
+      if (qr.isDark(row, col)) {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(x + col * cellSize, y + row * cellSize, cellSize + 0.5, cellSize + 0.5);
+      }
+    }
+  }
+}
+
+// ── Generate fake student names ─────────────────────────────────────────────
+function studentNameForCount(count) {
+  const names = ['Alice Johnson', 'Bob Smith', 'Carol Davis', 'David Lee', 'Emma Wilson',
+    'Frank Brown', 'Grace Kim', 'Henry Chen', 'Iris Patel', 'Jack Taylor'];
+  return names[count % names.length];
+}
+
 // ── Draw a sheet on canvas ──────────────────────────────────────────────────
 function drawSheet(canvas, questionCount, choiceCount = 4) {
   const SCALE = 2; // 2x for crisp printing
@@ -176,15 +201,30 @@ function drawSheet(canvas, questionCount, choiceCount = 4) {
     ctx.fillRect(m.x * s, m.y * s, MARK_SIZE * s, MARK_SIZE * s);
   }
 
-  // Title — placed between top marks (y≈18) and bubble area (y≈67)
+  // Title — matches sheet.tsx (top: 44, 60)
   ctx.fillStyle = '#000';
   ctx.font = `bold ${13 * s}px Arial`;
   ctx.textAlign = 'center';
-  ctx.fillText('GradeSnap', (SHEET_W / 2) * s, 32 * s);
+  ctx.fillText('GradeSnap', (SHEET_W / 2) * s, 38 * s);
 
   ctx.fillStyle = '#444';
   ctx.font = `${8 * s}px Arial`;
-  ctx.fillText(`Answer Sheet  \u2022  ${questionCount} Questions`, (SHEET_W / 2) * s, 44 * s);
+  ctx.fillText(`Answer Sheet  \u2022  ${questionCount} Questions`, (SHEET_W / 2) * s, 50 * s);
+
+  // QR code — top-right area (matches sheet.tsx: right:45, top:15, size:55)
+  const studentName = studentNameForCount(questionCount);
+  const quizId = 'test' + questionCount;
+  const qrPayload = `GS:${quizId}:${studentName}`;
+  const qrSize = 38 * s;
+  const qrX = (SHEET_W - 45 - 55) * s;
+  const qrY = 15 * s;
+  drawQRCode(ctx, qrPayload, qrX, qrY, qrSize);
+
+  // Student name — matches sheet.tsx: top:74, left:40
+  ctx.fillStyle = '#333';
+  ctx.font = `500 ${9 * s}px Arial`;
+  ctx.textAlign = 'left';
+  // ctx.fillText(`Name: ${studentName}`, 40 * s, 65 * s);
 
   // Compute layout
   const layout = computeGridLayout(questionCount, choiceCount);
@@ -264,7 +304,8 @@ for (const count of counts) {
 
   const label = document.createElement('div');
   label.className = 'sheet-label no-print';
-  label.textContent = `${count} Questions \u2022 4 Choices (A\u2013D)`;
+  const name = studentNameForCount(count);
+  label.textContent = `${count} Questions \u2022 4 Choices (A\u2013D) \u2022 Student: ${name} \u2022 QR: GS:test${count}:${name}`;
   page.appendChild(label);
 
   const canvas = document.createElement('canvas');

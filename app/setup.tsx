@@ -7,8 +7,11 @@ import {
   TextInput,
   Pressable,
   Platform,
+  Modal,
+  FlatList,
 } from "react-native";
 import { router } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
@@ -17,6 +20,7 @@ import Colors from "@/constants/colors";
 import {
   loadQuiz,
   saveQuiz,
+  loadRoster,
   QuizQuestion,
   ChoiceLetter,
   DEFAULT_QUIZ,
@@ -137,7 +141,10 @@ export default function SetupScreen() {
   const insets = useSafeAreaInsets();
   const [questions, setQuestions] = useState<QuizQuestion[]>(DEFAULT_QUIZ.questions);
   const [choiceCount, setChoiceCount] = useState<4 | 5>(DEFAULT_QUIZ.choiceCount);
+  const [quizId, setQuizId] = useState(DEFAULT_QUIZ.id);
   const [loaded, setLoaded] = useState(false);
+  const [students, setStudents] = useState<string[]>([]);
+  const [showPicker, setShowPicker] = useState(false);
 
   const letters = choiceCount === 5 ? LETTERS_5 : LETTERS_4;
   const questionCount = questions.length;
@@ -147,9 +154,17 @@ export default function SetupScreen() {
     loadQuiz().then((config) => {
       setQuestions(config.questions);
       setChoiceCount(config.choiceCount);
+      setQuizId(config.id);
       setLoaded(true);
     });
   }, []);
+
+  // Reload roster when returning from students screen
+  useFocusEffect(
+    React.useCallback(() => {
+      loadRoster().then((r) => setStudents(r.students));
+    }, [])
+  );
 
   const setQuestionCount = (count: number) => {
     const clamped = Math.max(1, Math.min(100, count));
@@ -185,18 +200,33 @@ export default function SetupScreen() {
     });
   };
 
+  const currentConfig = () => ({ id: quizId, questions, choiceCount, createdAt: Date.now() });
+
   const handleSave = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await saveQuiz({ questions, choiceCount, createdAt: Date.now() });
+    await saveQuiz(currentConfig());
     router.back();
   };
 
-  const handleViewSheet = async () => {
-    await saveQuiz({ questions, choiceCount, createdAt: Date.now() });
+  const navigateToSheet = async (studentName?: string) => {
+    await saveQuiz(currentConfig());
     router.push({
       pathname: "/sheet",
-      params: { questions: JSON.stringify(questions), choiceCount: String(choiceCount) },
+      params: {
+        questions: JSON.stringify(questions),
+        choiceCount: String(choiceCount),
+        quizId,
+        ...(studentName ? { studentName } : {}),
+      },
     });
+  };
+
+  const handleViewSheet = async () => {
+    if (students.length > 0) {
+      setShowPicker(true);
+    } else {
+      navigateToSheet();
+    }
   };
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
@@ -266,6 +296,19 @@ export default function SetupScreen() {
             </Text>
           </Pressable>
         </View>
+
+        {/* Students button */}
+        <View style={[styles.configItem, { marginLeft: "auto" }]}>
+          <Text style={styles.configLabel}>Students</Text>
+          <Pressable
+            onPress={() => router.push("/students")}
+            style={({ pressed }) => [styles.choiceToggle, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.choiceToggleText}>
+              {students.length || "0"}
+            </Text>
+          </Pressable>
+        </View>
       </View>
 
       <Text style={styles.subtitle}>
@@ -309,6 +352,41 @@ export default function SetupScreen() {
           <Text style={styles.saveBtnText}>Save & Go Back</Text>
         </Pressable>
       </View>
+
+      {/* Student picker modal */}
+      <Modal visible={showPicker} transparent animationType="slide">
+        <Pressable style={styles.modalOverlay} onPress={() => setShowPicker(false)}>
+          <Pressable style={[styles.modalSheet, { paddingBottom: bottomPad + 16 }]}>
+            <Text style={styles.modalTitle}>Select Student</Text>
+            <FlatList
+              data={students}
+              keyExtractor={(item, i) => `${item}-${i}`}
+              style={styles.modalList}
+              renderItem={({ item }) => (
+                <Pressable
+                  onPress={() => {
+                    setShowPicker(false);
+                    navigateToSheet(item);
+                  }}
+                  style={({ pressed }) => [styles.modalRow, pressed && { opacity: 0.7 }]}
+                >
+                  <Ionicons name="person-outline" size={18} color={Colors.accent} />
+                  <Text style={styles.modalRowText}>{item}</Text>
+                </Pressable>
+              )}
+            />
+            <Pressable
+              onPress={() => {
+                setShowPicker(false);
+                navigateToSheet();
+              }}
+              style={({ pressed }) => [styles.modalBlank, pressed && { opacity: 0.7 }]}
+            >
+              <Text style={styles.modalBlankText}>Blank Sheet (no student)</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -532,5 +610,54 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Inter_700Bold",
     color: Colors.background,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: Colors.overlay,
+    justifyContent: "flex-end",
+  },
+  modalSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: "60%",
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontFamily: "Inter_700Bold",
+    color: Colors.textPrimary,
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  modalList: {
+    flexGrow: 0,
+  },
+  modalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderColor: Colors.border,
+  },
+  modalRowText: {
+    fontSize: 16,
+    fontFamily: "Inter_500Medium",
+    color: Colors.textPrimary,
+  },
+  modalBlank: {
+    marginTop: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  modalBlankText: {
+    fontSize: 14,
+    fontFamily: "Inter_500Medium",
+    color: Colors.textSecondary,
   },
 });

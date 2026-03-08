@@ -23,6 +23,7 @@ function RootLayoutNav() {
       <Stack.Screen name="results" options={{ presentation: "card" }} />
       <Stack.Screen name="setup" options={{ presentation: "card" }} />
       <Stack.Screen name="sheet" options={{ presentation: "card" }} />
+      <Stack.Screen name="students" options={{ presentation: "card" }} />
     </Stack>
   );
 }

@@ -11,6 +11,7 @@
  */
 
 import PerspT from "perspective-transform";
+import jsQR from "jsqr";
 import type { QuizQuestion } from "./quiz-storage";
 import { computeGridLayout, WARP_W as GRID_WARP_W, WARP_H as GRID_WARP_H } from "./grid-layout";
 
@@ -278,6 +279,91 @@ function findFourMarks(
   return [tl, tr, bl, br];
 }
 
+// ── QR code decoding ─────────────────────────────────────────────────────────
+
+// QR scan region in normalized sheet coordinates (top-right area)
+// Covers QR at right=45, top=15, size=55 on 320×450 sheet
+const QR_NX0 = 0.60;
+const QR_NX1 = 0.95;
+const QR_NY0 = 0.01;
+const QR_NY1 = 0.20;
+
+/**
+ * Decode a QR code from the top-right region of the detected sheet.
+ * Uses PerspT inverse mapping to produce a RECTIFIED (perspective-corrected)
+ * image of the QR region — same technique as bubble sampling.
+ * Returns parsed { quizId, studentName } or null.
+ */
+function decodeSheetQR(
+  pixels: Uint8Array,
+  W: number,
+  H: number,
+  corners: [[number, number], [number, number], [number, number], [number, number]],
+): { quizId: string; studentName: string } | null {
+  try {
+    const idealFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
+    const detectedFlat = corners.flatMap(([x, y]) => [x, y]);
+    const invPersp = PerspT(idealFlat, detectedFlat);
+
+    // Rectified output size (in warped pixel space)
+    const outW = Math.round((QR_NX1 - QR_NX0) * WARP_W);
+    const outH = Math.round((QR_NY1 - QR_NY0) * WARP_H);
+    if (outW < 10 || outH < 10) return null;
+
+    // Sample rectified QR region: for each output pixel, map through
+    // inverse perspective to get the original image coordinate
+    const gray = new Uint8Array(outW * outH);
+    const wxBase = QR_NX0 * WARP_W;
+    const wyBase = QR_NY0 * WARP_H;
+
+    for (let y = 0; y < outH; y++) {
+      for (let x = 0; x < outW; x++) {
+        const [ix, iy] = invPersp.transform(wxBase + x, wyBase + y);
+        const px = Math.round(ix);
+        const py = Math.round(iy);
+        gray[y * outW + x] =
+          px >= 0 && px < W && py >= 0 && py < H
+            ? pixels[py * W + px]
+            : 255;
+      }
+    }
+
+    // Normalize contrast: stretch min/max to 0-255
+    let gMin = 255, gMax = 0;
+    for (let i = 0; i < gray.length; i++) {
+      if (gray[i] < gMin) gMin = gray[i];
+      if (gray[i] > gMax) gMax = gray[i];
+    }
+    const gRange = gMax - gMin || 1;
+
+    // Convert to RGBA with contrast normalization (jsQR needs Uint8ClampedArray RGBA)
+    const rgba = new Uint8ClampedArray(outW * outH * 4);
+    for (let i = 0; i < gray.length; i++) {
+      const v = Math.round(((gray[i] - gMin) / gRange) * 255);
+      const j = i * 4;
+      rgba[j] = v;
+      rgba[j + 1] = v;
+      rgba[j + 2] = v;
+      rgba[j + 3] = 255;
+    }
+
+    const result = jsQR(rgba, outW, outH, { inversionAttempts: "attemptBoth" });
+    console.log(`[QR] rectified=${outW}x${outH} decoded=${result?.data ?? 'null'}`);
+    if (!result?.data) return null;
+
+    // Parse GS:<quizId>:<studentName>
+    const parts = result.data.split(":");
+    if (parts.length >= 3 && parts[0] === "GS") {
+      console.log(`[QR] student=${parts.slice(2).join(":")}`);
+      return { quizId: parts[1], studentName: parts.slice(2).join(":") };
+    }
+    return null;
+  } catch (e) {
+    console.warn('[QR] decode error:', e);
+    return null;
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -438,7 +524,7 @@ export async function detectAndScan(
   base64: string,
   questions: QuizQuestion[],
   choiceCount: 4 | 5 = 4,
-): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number] }> {
+): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number]; studentName?: string; quizId?: string }> {
   if (!isNativeAvailable()) {
     // Server fallback: detect first, then scan if found
     try {
@@ -479,6 +565,9 @@ export async function detectAndScan(
   }
 
   OpenCV.releaseBuffers([grayMat.id]);
+
+  // Decode QR code from sheet (non-blocking, returns null if no QR)
+  const qrResult = decodeSheetQR(pixels, W, H, corners);
 
   // Use PerspT to map bubble positions from warped space → original image space.
   // This bypasses native warpPerspective (which produces all-black output in some
@@ -528,7 +617,10 @@ export async function detectAndScan(
     }
   }
 
-  return { found: true, answers, confidence, corners, imageSize: [W, H] as [number, number] };
+  return {
+    found: true, answers, confidence, corners, imageSize: [W, H] as [number, number],
+    ...(qrResult ? { studentName: qrResult.studentName, quizId: qrResult.quizId } : {}),
+  };
 }
 
 // ── Fallback: perspective-transform JS library ────────────────────────────────
