@@ -134,8 +134,8 @@
       <input type="text" id="studentName" placeholder="Leave blank for unfilled">
     </div>
     <div class="form-group">
-      <label>Student Number (0–99, barcode)</label>
-      <input type="number" id="studentNumber" value="" min="0" max="99" placeholder="Leave blank for unfilled">
+      <label>Student ID (barcode)</label>
+      <input type="text" id="studentNumber" value="" placeholder="Leave blank for unfilled">
     </div>
 
     <hr class="sep">
@@ -209,9 +209,9 @@ const MARKS = [
 ];
 
 // ── Code 128B barcode encoder (MUST match lib/barcode.ts) ───────────────────
-const BARCODE_X0 = 0.25, BARCODE_X1 = 0.75;
-const BARCODE_Y0 = 0.845, BARCODE_Y1 = 0.90;
-const BARCODE_LABEL_Y = 0.84;
+const BARCODE_X0 = 0.20, BARCODE_X1 = 0.80;
+const BARCODE_Y0 = 0.88, BARCODE_Y1 = 0.91;
+const BARCODE_LABEL_Y = 0.875;
 
 const CODE128_BINARY = [
   "11011001100","11001101100","11001100110","10010011000","10010001100",
@@ -491,10 +491,10 @@ function drawSheet(canvas, opts) {
   ctx.textAlign = 'left';
   ctx.fillText('STUDENT NO.', BARCODE_X0 * SHEET_W * S, (BARCODE_LABEL_Y * SHEET_H - 3) * S);
 
-  // Draw barcode if student number provided
-  const studentNum = parseInt(opts.studentNumber);
-  if (!isNaN(studentNum) && studentNum >= 0 && studentNum <= 99) {
-    const text = String(studentNum).padStart(2, '0');
+  // Draw barcode if student ID provided
+  const studentId = (opts.studentNumber || '').trim();
+  if (studentId.length > 0) {
+    const text = studentId;
     const widths = encodeCode128B(text);
     const totalUnits = widths.reduce((a, b) => a + b, 0);
     const quietZone = 10;

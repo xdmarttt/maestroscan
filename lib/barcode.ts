@@ -8,11 +8,11 @@
  */
 
 // ── Barcode region constants (normalized sheet coordinates) ──────────────────
-export const BARCODE_X0 = 0.25;
-export const BARCODE_X1 = 0.75;
-export const BARCODE_Y0 = 0.845;
-export const BARCODE_Y1 = 0.90;
-export const BARCODE_LABEL_Y = 0.84;
+export const BARCODE_X0 = 0.20;
+export const BARCODE_X1 = 0.80;
+export const BARCODE_Y0 = 0.88;
+export const BARCODE_Y1 = 0.91;
+export const BARCODE_LABEL_Y = 0.875;
 
 // ── Code 128 binary patterns (authoritative source) ─────────────────────────
 // Each string is the 11-module binary pattern (1=bar, 0=space) for that value.

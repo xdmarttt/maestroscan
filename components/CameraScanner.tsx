@@ -1,7 +1,7 @@
 import React, { forwardRef } from "react";
 import { View, StyleSheet, Platform } from "react-native";
 
-let CameraViewComponent: React.ComponentType<{ style?: any; facing?: string; ref?: any }> | null = null;
+let CameraViewComponent: React.ComponentType<{ style?: any; facing?: string; ref?: any; barcodeScannerSettings?: any; onBarcodeScanned?: (result: { data: string; type: string }) => void }> | null = null;
 
 if (Platform.OS !== "web") {
   try {
@@ -12,12 +12,24 @@ if (Platform.OS !== "web") {
   }
 }
 
-export const CameraScanner = forwardRef<any, {}>((_, ref) => {
+interface CameraScannerProps {
+  onBarcodeScanned?: (result: { data: string; type: string }) => void;
+}
+
+export const CameraScanner = forwardRef<any, CameraScannerProps>(({ onBarcodeScanned }, ref) => {
   if (Platform.OS === "web" || !CameraViewComponent) {
     return <View style={[StyleSheet.absoluteFill, styles.webBg]} />;
   }
 
-  return <CameraViewComponent ref={ref} style={StyleSheet.absoluteFill} facing="back" />;
+  return (
+    <CameraViewComponent
+      ref={ref}
+      style={StyleSheet.absoluteFill}
+      facing="back"
+      barcodeScannerSettings={{ barcodeTypes: ["code128"] }}
+      onBarcodeScanned={onBarcodeScanned}
+    />
+  );
 });
 
 CameraScanner.displayName = "CameraScanner";

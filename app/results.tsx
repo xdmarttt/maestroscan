@@ -180,15 +180,16 @@ export default function ResultsScreen() {
   const answers: string[] = JSON.parse((params.answers as string) || "[]");
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
   const studentIdParam = params.studentId as string | undefined;
-  const studentId = studentIdParam !== undefined ? parseInt(studentIdParam, 10) : null;
+  const studentId = studentIdParam ?? null;
   const [studentName, setStudentName] = useState("");
 
   // Look up student name from roster by ID
   useEffect(() => {
-    if (studentId === null || isNaN(studentId)) return;
+    if (!studentId) return;
+    const numId = parseInt(studentId, 10);
     loadRoster().then((r) => {
-      if (studentId >= 1 && studentId <= r.students.length) {
-        setStudentName(r.students[studentId - 1]); // 1-based ID
+      if (!isNaN(numId) && numId >= 1 && numId <= r.students.length) {
+        setStudentName(r.students[numId - 1]); // 1-based ID
       } else {
         setStudentName(`Student #${studentId}`);
       }

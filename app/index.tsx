@@ -106,6 +106,12 @@ export default function ScannerScreen() {
   const isDetectingRef = useRef(false);
   const framePosRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const detectLoopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastBarcodeRef = useRef<string | null>(null);
+
+  // Native barcode scanner callback — fires continuously while barcode is visible
+  const handleBarcodeScanned = useCallback((result: { data: string; type: string }) => {
+    lastBarcodeRef.current = result.data;
+  }, []);
 
   // Measure frame once and cache — position is static
   const getFramePos = useCallback(async () => {
@@ -157,7 +163,8 @@ export default function ScannerScreen() {
       if (!result.found) { setSheetDetected(false); return; }
 
       // Sheet found and scanned in one pass — navigate immediately
-      console.log(`[scan] found! studentId=${result.studentId ?? 'none'}`);
+      const barcode = lastBarcodeRef.current;
+      console.log(`[scan] found! studentId=${barcode ?? 'none'}`);
       navigating = true;
       setSheetDetected(true);
       isScanningRef.current = true;
@@ -173,7 +180,7 @@ export default function ScannerScreen() {
           answers: JSON.stringify(result.answers),
           questions: JSON.stringify(questions),
           choiceCount: String(choiceCount),
-          ...(result.studentId !== undefined ? { studentId: String(result.studentId) } : {}),
+          ...(barcode ? { studentId: barcode } : {}),
         },
       });
     } catch {
@@ -308,8 +315,6 @@ export default function ScannerScreen() {
           answers: JSON.stringify(data.answers),
           questions: JSON.stringify(questions),
           choiceCount: String(choiceCount),
-          corners: "[]",
-          imageSize: "[]",
         },
       });
     } catch (err: any) {
@@ -358,7 +363,7 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
-      <CameraScanner ref={cameraRef} />
+      <CameraScanner ref={cameraRef} onBarcodeScanned={handleBarcodeScanned} />
 
       <View style={[StyleSheet.absoluteFill, styles.overlay]} />
 

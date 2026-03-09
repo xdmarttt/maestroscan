@@ -13,7 +13,6 @@
 import PerspT from "perspective-transform";
 import type { QuizQuestion } from "./quiz-storage";
 import { computeGridLayout, WARP_W as GRID_WARP_W, WARP_H as GRID_WARP_H } from "./grid-layout";
-import { BARCODE_X0, BARCODE_X1, BARCODE_Y0, BARCODE_Y1, decodeCode128B } from "./barcode";
 
 // Lazy-load native OpenCV — fails gracefully in Expo Go
 let OpenCV: any = null;
@@ -374,121 +373,6 @@ function findFourMarks(
  * Binarize profile at given threshold, run-length encode, filter noise, decode.
  * Returns decoded number or null.
  */
-function tryBarcodeThreshold(
-  profile: Float64Array,
-  SAMPLES: number,
-  threshold: number,
-  minRun: number,
-): string | null {
-  // Binarize (true = black bar)
-  const binary: boolean[] = [];
-  for (let s = 0; s < SAMPLES; s++) binary.push(profile[s] < threshold);
-
-  // Find barcode extent (first/last black pixel)
-  let first = 0;
-  while (first < SAMPLES && !binary[first]) first++;
-  let last = SAMPLES - 1;
-  while (last > first && !binary[last]) last--;
-  if (first >= last || !binary[first]) return null;
-
-  // Run-length encode
-  const rawRuns: number[] = [];
-  let current = binary[first];
-  let runLen = 0;
-  for (let s = first; s <= last; s++) {
-    if (binary[s] === current) {
-      runLen++;
-    } else {
-      rawRuns.push(runLen);
-      current = binary[s];
-      runLen = 1;
-    }
-  }
-  rawRuns.push(runLen);
-
-  // Filter noise: merge tiny internal runs with neighbors
-  const runs = [...rawRuns];
-  for (let pass = 0; pass < 30; pass++) {
-    let merged = false;
-    for (let i = 1; i < runs.length - 1; i++) {
-      if (runs[i] < minRun) {
-        runs[i - 1] += runs[i] + runs[i + 1];
-        runs.splice(i, 2);
-        merged = true;
-        break;
-      }
-    }
-    if (!merged) break;
-  }
-
-  return decodeCode128B(runs);
-}
-
-function readBarcode(
-  pixels: Uint8Array,
-  W: number,
-  H: number,
-  invPersp: ReturnType<typeof PerspT>,
-): number | null {
-  const SCAN_LINES = 30;
-  const SAMPLES = 600;
-
-  // 1. Accumulate intensity profile by averaging multiple scan lines
-  const profile = new Float64Array(SAMPLES);
-  for (let line = 0; line < SCAN_LINES; line++) {
-    const ny = BARCODE_Y0 + (line + 0.5) * (BARCODE_Y1 - BARCODE_Y0) / SCAN_LINES;
-    for (let s = 0; s < SAMPLES; s++) {
-      const nx = BARCODE_X0 + (s + 0.5) * (BARCODE_X1 - BARCODE_X0) / SAMPLES;
-      const [ix, iy] = invPersp.transform(nx * WARP_W, ny * WARP_H);
-      const px = Math.round(ix);
-      const py = Math.round(iy);
-      if (px >= 0 && px < W && py >= 0 && py < H) {
-        profile[s] += pixels[py * W + px];
-      }
-    }
-  }
-  for (let s = 0; s < SAMPLES; s++) profile[s] /= SCAN_LINES;
-
-  // 2. Smooth profile with 3-sample moving average to reduce noise
-  const smooth = new Float64Array(SAMPLES);
-  smooth[0] = (profile[0] + profile[1]) / 2;
-  smooth[SAMPLES - 1] = (profile[SAMPLES - 2] + profile[SAMPLES - 1]) / 2;
-  for (let s = 1; s < SAMPLES - 1; s++) {
-    smooth[s] = (profile[s - 1] + profile[s] + profile[s + 1]) / 3;
-  }
-
-  // 3. Percentile-based threshold (resistant to outliers like specks/reflections)
-  const sorted = Array.from(smooth).sort((a, b) => a - b);
-  const p05 = sorted[Math.floor(SAMPLES * 0.05)];
-  const p95 = sorted[Math.floor(SAMPLES * 0.95)];
-
-  if (p95 - p05 < 30) {
-    console.log(`[ID] barcode: low contrast (p05=${p05.toFixed(0)}, p95=${p95.toFixed(0)}), skipping`);
-    return null;
-  }
-
-  // 4. Try multiple thresholds: 40%, 50%, 60% between dark/light peaks
-  const thresholds = [0.5, 0.4, 0.6].map(f => p05 + (p95 - p05) * f);
-  // Adaptive noise filter: ~0.4 of estimated unit width
-  // For a 2-char barcode: 77 total units across SAMPLES → ~7.8 samples/unit
-  const estUnitWidth = SAMPLES / 80;
-  const minRun = Math.max(2, Math.round(estUnitWidth * 0.4));
-
-  for (const thresh of thresholds) {
-    const decoded = tryBarcodeThreshold(smooth, SAMPLES, thresh, minRun);
-    if (decoded) {
-      const num = parseInt(decoded, 10);
-      if (!isNaN(num) && num >= 0 && num <= 99) {
-        console.log(`[ID] barcode decoded: "${decoded}" → student=${num} (thresh=${thresh.toFixed(0)})`);
-        return num;
-      }
-    }
-  }
-
-  console.log(`[ID] barcode: decode failed at all thresholds (contrast=${(p95 - p05).toFixed(0)})`);
-  return null;
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -649,7 +533,7 @@ export async function detectAndScan(
   base64: string,
   questions: QuizQuestion[],
   choiceCount: 4 | 5 = 4,
-): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number]; studentId?: number }> {
+): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number] }> {
   if (!isNativeAvailable()) {
     // Server fallback: detect first, then scan if found
     try {
@@ -719,9 +603,6 @@ export async function detectAndScan(
   const adjOuterR1 = Math.max(adjInnerR + 1, Math.round(layout.outerR1 * radiusScale));
   const adjOuterR2 = Math.max(adjOuterR1 + 1, Math.round(layout.outerR2 * radiusScale));
 
-  // Read student ID from barcode via PerspT
-  const studentId = readBarcode(pixels, W, H, invPersp);
-
   // Sample answer bubbles via PerspT on original pixels
   const answers: string[] = [];
   const confidence: number[] = [];
@@ -751,7 +632,6 @@ export async function detectAndScan(
 
   return {
     found: true, answers, confidence, corners, imageSize: [W, H] as [number, number],
-    ...(studentId !== null ? { studentId } : {}),
   };
 }
 
