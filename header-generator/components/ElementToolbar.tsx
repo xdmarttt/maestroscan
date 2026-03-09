@@ -92,6 +92,26 @@ export default function ElementToolbar({ canvasRef }: ElementToolbarProps) {
       </div>
 
       <Separator className="mt-2" />
+      <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+        Dynamic Variables
+      </h2>
+      <p className="text-xs text-muted-foreground mb-1">
+        Use these in text fields. They&apos;ll be replaced with sample values in the PDF preview.
+      </p>
+      <div className="flex flex-col gap-0.5 text-xs font-mono text-muted-foreground">
+        <span>{`{{student_name}}`}</span>
+        <span>{`{{student_id}}`}</span>
+        <span>{`{{section}}`}</span>
+        <span>{`{{date}}`}</span>
+        <span>{`{{score}}`}</span>
+        <span>{`{{teacher}}`}</span>
+        <span>{`{{subject}}`}</span>
+        <span>{`{{quarter}}`}</span>
+        <span>{`{{quiz_title}}`}</span>
+        <span>{`{{total_points}}`}</span>
+      </div>
+
+      <Separator className="mt-2" />
       <p className="text-xs text-muted-foreground">
         Ctrl+Z to undo. Ctrl+Shift+Z to redo. Double-click text to edit inline.
       </p>

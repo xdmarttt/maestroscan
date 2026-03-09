@@ -14,3 +14,19 @@ export const HEADER_WIDTH = SHEET_W - 40; // 280 (20px margin each side for corn
 export const CANVAS_SCALE = 3;
 export const CANVAS_DISPLAY_W = HEADER_WIDTH * CANVAS_SCALE; // 840
 export const CANVAS_DISPLAY_H = HEADER_HEIGHT * CANVAS_SCALE; // 360
+
+// Dynamic placeholder tokens → sample preview values shown in PDF
+export const PLACEHOLDER_PREVIEWS: Record<string, string> = {
+  student_name: "Juan Dela Cruz",
+  student_id: "2015-10833",
+  student_no: "2015-10833",
+  section: "Gr.7 – Einstein",
+  grade_section: "Gr.7 – Einstein",
+  date: "Mar 9, 2026",
+  score: "48",
+  teacher: "Ms. Garcia",
+  subject: "Mathematics 7",
+  quarter: "Q3",
+  quiz_title: "Algebraic Expressions Quiz",
+  total_points: "50",
+};

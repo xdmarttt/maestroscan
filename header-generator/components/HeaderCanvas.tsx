@@ -7,7 +7,7 @@ import {
   forwardRef,
   useCallback,
 } from "react";
-import { CANVAS_DISPLAY_W, CANVAS_DISPLAY_H } from "@/lib/constants";
+import { CANVAS_DISPLAY_W, CANVAS_DISPLAY_H, PLACEHOLDER_PREVIEWS } from "@/lib/constants";
 import { templates } from "@/lib/templates";
 
 export interface SelectedInfo {
@@ -30,6 +30,8 @@ export interface CanvasHandle {
   deleteSelected: () => void;
   updateSelected: (props: Record<string, unknown>) => void;
   toDataURL: () => string;
+  /** Export with {{placeholder}} tokens replaced by sample preview values */
+  toPreviewDataURL: () => string;
   getSelectedInfo: () => SelectedInfo | null;
   loadTemplate: (templateId?: string) => void;
   undo: () => void;
@@ -264,6 +266,34 @@ const HeaderCanvas = forwardRef<CanvasHandle, Props>(function HeaderCanvas(
             multiplier: 1,
           }) ?? ""
         );
+      },
+      toPreviewDataURL: () => {
+        const canvas = fabricRef.current;
+        if (!canvas) return "";
+
+        // Collect textboxes with placeholders and swap in preview values
+        const originals: { obj: unknown; text: string }[] = [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const obj of canvas.getObjects() as any[]) {
+          if (obj.type === "textbox" && typeof obj.text === "string" && obj.text.includes("{{")) {
+            originals.push({ obj, text: obj.text });
+            obj.text = obj.text.replace(
+              /\{\{(\w+)\}\}/g,
+              (_: string, key: string) => PLACEHOLDER_PREVIEWS[key.toLowerCase()] ?? `{{${key}}}`,
+            );
+          }
+        }
+        canvas.requestRenderAll();
+
+        const dataUrl = canvas.toDataURL({ format: "png", multiplier: 1 });
+
+        // Restore originals
+        for (const { obj, text } of originals) {
+          (obj as { text: string }).text = text;
+        }
+        canvas.requestRenderAll();
+
+        return dataUrl;
       },
       getSelectedInfo: readSelected,
       loadTemplate: (templateId?: string) => {

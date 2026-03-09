@@ -431,7 +431,7 @@ function drawSheet(canvas, opts) {
       const isFilled = opts.filledAnswers && opts.filledAnswers[q] === layout.letters[c];
 
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      if (isFilled) { ctx.fillStyle = '#1a1a1a'; ctx.fill(); }
+      if (isFilled) { ctx.fillStyle = '#4a4a4a'; ctx.fill(); }
       else { ctx.strokeStyle = '#333'; ctx.lineWidth = 1.2 * S; ctx.stroke(); }
     }
   }
