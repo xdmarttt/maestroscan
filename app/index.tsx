@@ -149,6 +149,8 @@ export default function ScannerScreen() {
   const detectLoopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBarcodeRef = useRef<string | null>(null);
   const stableCountRef = useRef(0);
+  const [waitingForClear, setWaitingForClear] = useState(false); // UI state for "remove sheet" message
+  const waitForClearRef = useRef(false); // ref mirror for detection loop
   const STABLE_THRESHOLD = 1; // fire immediately when all 4 corners lock
 
   // Native barcode scanner callback — ref-only, no state updates, no re-renders
@@ -223,6 +225,16 @@ export default function ScannerScreen() {
       setCornersLocked(locked);
       const allLocked = locked.every(Boolean);
 
+      // After a scan, wait for the sheet to be removed before re-scanning
+      if (waitForClearRef.current) {
+        if (!allLocked) {
+          waitForClearRef.current = false;
+          setWaitingForClear(false); // sheet removed — ready for next scan
+        }
+        stableCountRef.current = 0;
+        return;
+      }
+
       if (!allLocked) {
         stableCountRef.current = 0;
         return;
@@ -245,6 +257,8 @@ export default function ScannerScreen() {
       // Success — show result popup
       const barcode = lastBarcodeRef.current;
       navigating = true;
+      waitForClearRef.current = true;
+      setWaitingForClear(true);
       stableCountRef.current = 0;
       isScanningRef.current = true;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -255,42 +269,47 @@ export default function ScannerScreen() {
       );
       const total = questions.length;
 
-      // Lookup student name from roster
-      let studentName: string | null = null;
-      if (barcode) {
-        try {
-          const roster = await loadRoster();
-          const idx = Number(barcode);
-          if (roster.students[idx]) studentName = roster.students[idx];
-        } catch { /* no roster */ }
-      }
-
-      // Generate debug image (tight crop + bubble circles)
-      let scannedImage = b64;
-      if (result.corners) {
-        try {
-          const debugPath = photo.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
-          generateDebugImage(b64, result.corners as [[number,number],[number,number],[number,number],[number,number]], result.answers, questions, choiceCount, debugPath);
-          const debugResult = await ImageManipulator.manipulateAsync(
-            `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
-          );
-          if (debugResult.base64) scannedImage = debugResult.base64;
-        } catch (e) { console.warn('[debug-img] auto:', e); }
-      }
-
+      // Show popup immediately — don't wait for debug image or roster
       scanResultRef.current = true;
       setScanResult({
         answers: result.answers,
         score,
         total,
         percentage: total > 0 ? Math.round((score / total) * 100) : 0,
-        studentName,
+        studentName: null,
         studentId: barcode ?? null,
-        scannedImage,
+        scannedImage: b64,
       });
       setIsScanning(false);
-    } catch {
-      // silent — detection errors don't block scanning
+
+      // Async: lookup student name + generate debug image, then update popup
+      try {
+        let studentName: string | null = null;
+        if (barcode) {
+          try {
+            const roster = await loadRoster();
+            const idx = Number(barcode);
+            if (roster.students[idx]) studentName = roster.students[idx];
+          } catch { /* no roster */ }
+        }
+
+        let scannedImage = b64;
+        if (result.corners) {
+          try {
+            const debugPath = photo.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
+            generateDebugImage(b64, result.corners as [[number,number],[number,number],[number,number],[number,number]], result.answers, questions, choiceCount, debugPath);
+            const debugResult = await ImageManipulator.manipulateAsync(
+              `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
+            );
+            if (debugResult.base64) scannedImage = debugResult.base64;
+          } catch (e) { console.warn('[debug-img] auto:', e); }
+        }
+
+        // Update popup with enriched data (student name + debug image)
+        setScanResult(prev => prev ? { ...prev, studentName, scannedImage } : prev);
+      } catch (e) { console.warn('[enrich] auto:', e); }
+    } catch (e) {
+      console.error('[scan] auto-detect error:', e);
     } finally {
       isDetectingRef.current = false;
       // Chain: schedule next detection unless we're navigating to results
@@ -306,10 +325,12 @@ export default function ScannerScreen() {
       isScanningRef.current = false;
       isDetectingRef.current = false;
       scanResultRef.current = false;
+      waitForClearRef.current = false;
       setIsScanning(false);
       setScanDone(false);
       setScanError(null);
       setScanResult(null);
+      setWaitingForClear(false);
       setCornersLocked([false, false, false, false]);
       lastBarcodeRef.current = null;
       stableCountRef.current = 0;
@@ -389,46 +410,53 @@ export default function ScannerScreen() {
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      waitForClearRef.current = true;
+      setWaitingForClear(true);
 
       const score = data.answers.reduce(
         (n, a, i) => n + (a === questions[i]?.correct ? 1 : 0), 0
       );
       const total = questions.length;
 
-      // Lookup student name from roster
-      let studentName: string | null = null;
       const barcode = lastBarcodeRef.current;
-      if (barcode) {
-        try {
-          const roster = await loadRoster();
-          const idx = Number(barcode);
-          if (roster.students[idx]) studentName = roster.students[idx];
-        } catch { /* no roster */ }
-      }
 
-      // Generate debug image (tight crop + bubble circles)
-      let scannedImage = base64;
-      if (data.corners) {
-        try {
-          const debugPath = photo.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
-          generateDebugImage(base64, data.corners, data.answers, questions, choiceCount, debugPath);
-          const debugResult = await ImageManipulator.manipulateAsync(
-            `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
-          );
-          if (debugResult.base64) scannedImage = debugResult.base64;
-        } catch (e) { console.warn('[debug-img] manual:', e); }
-      }
-
+      // Show popup immediately — don't wait for debug image or roster
       scanResultRef.current = true;
       setScanResult({
         answers: data.answers,
         score,
         total,
         percentage: total > 0 ? Math.round((score / total) * 100) : 0,
-        studentName,
+        studentName: null,
         studentId: barcode ?? null,
-        scannedImage,
+        scannedImage: base64,
       });
+
+      // Async: lookup student name + generate debug image, then update popup
+      try {
+        let studentName: string | null = null;
+        if (barcode) {
+          try {
+            const roster = await loadRoster();
+            const idx = Number(barcode);
+            if (roster.students[idx]) studentName = roster.students[idx];
+          } catch { /* no roster */ }
+        }
+
+        let scannedImage = base64;
+        if (data.corners) {
+          try {
+            const debugPath = photo.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
+            generateDebugImage(base64, data.corners, data.answers, questions, choiceCount, debugPath);
+            const debugResult = await ImageManipulator.manipulateAsync(
+              `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
+            );
+            if (debugResult.base64) scannedImage = debugResult.base64;
+          } catch (e) { console.warn('[debug-img] manual:', e); }
+        }
+
+        setScanResult(prev => prev ? { ...prev, studentName, scannedImage } : prev);
+      } catch (e) { console.warn('[enrich] manual:', e); }
     } catch (err: any) {
       console.error("Scan failed:", err);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -443,6 +471,8 @@ export default function ScannerScreen() {
   // Dismiss popup → resume scanning
   const handleScanNext = useCallback(() => {
     scanResultRef.current = false;
+    waitForClearRef.current = false;
+    setWaitingForClear(false);
     setScanResult(null);
     setScanError(null);
     isScanningRef.current = false;
@@ -544,12 +574,14 @@ export default function ScannerScreen() {
             </Pressable>
           </View>
         </View>
-        <Text style={[styles.headerSub, cornersLocked.every(Boolean) && { color: Colors.success }]}>
-          {cornersLocked.every(Boolean)
-            ? "All corners locked — scanning..."
-            : cornersLocked.some(Boolean)
-              ? `${cornersLocked.filter(Boolean).length}/4 corners aligned`
-              : "Point camera at the answer sheet"}
+        <Text style={[styles.headerSub, cornersLocked.every(Boolean) && !waitingForClear && { color: Colors.success }]}>
+          {waitingForClear
+            ? "Remove sheet to scan next"
+            : cornersLocked.every(Boolean)
+              ? "All corners locked — scanning..."
+              : cornersLocked.some(Boolean)
+                ? `${cornersLocked.filter(Boolean).length}/4 corners aligned`
+                : "Point camera at the answer sheet"}
         </Text>
       </Animated.View>
 
