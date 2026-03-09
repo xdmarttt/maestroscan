@@ -139,7 +139,7 @@
       <input type="text" id="studentName" value="Juan Dela Cruz" placeholder="Student name">
     </div>
     <div class="form-group">
-      <label>Student Number (0–99, for bubble grid)</label>
+      <label>Student Number (0–99, barcode)</label>
       <input type="number" id="studentNumber" value="7" min="0" max="99" placeholder="e.g. 7">
     </div>
 
@@ -217,18 +217,63 @@ const MARKS = [
   { x: SHEET_W - 9.6 - MARK_SIZE, y: SHEET_H - 18 - MARK_SIZE },
 ];
 
-// ── Student ID bubble grid constants (MUST match grid-layout.ts) ────────────
-const ID_X0 = 0.20, ID_X1 = 0.88;
-const ID_TENS_Y = 0.875, ID_ONES_Y = 0.905;
-const ID_DIGIT_COUNT = 10;
-const ID_BUBBLE_DIAM_NORM = 0.018;
+// ── Code 128B barcode encoder (MUST match lib/barcode.ts) ───────────────────
+const BARCODE_X0 = 0.25, BARCODE_X1 = 0.75;
+const BARCODE_Y0 = 0.845, BARCODE_Y1 = 0.90;
+const BARCODE_LABEL_Y = 0.84;
 
-function idBubbleCenter(row, digit) {
-  const spacing = (ID_X1 - ID_X0) / ID_DIGIT_COUNT;
-  return {
-    nx: ID_X0 + (digit + 0.5) * spacing,
-    ny: row === 0 ? ID_TENS_Y : ID_ONES_Y,
-  };
+const CODE128_BINARY = [
+  "11011001100","11001101100","11001100110","10010011000","10010001100",
+  "10001001100","10011001000","10011000100","10001100100","11001001000",
+  "11001000100","11000100100","10110011100","10011011100","10011001110",
+  "10111001100","10011101100","10011100110","11001110010","11001011100",
+  "11001001110","11011100100","11001110100","11101101110","11101001100",
+  "11100101100","11100100110","11101100100","11100110100","11100110010",
+  "11011011000","11011000110","11000110110","10100011000","10001011000",
+  "10001000110","10110001000","10001101000","10001100010","11010001000",
+  "11000101000","11000100010","10110111000","10110001110","10001101110",
+  "10111011000","10111000110","10001110110","11101110110","11010001110",
+  "11000101110","11011101000","11011100010","11011101110","11101011000",
+  "11101000110","11100010110","11101101000","11101100010","11100011010",
+  "11101111010","11001000010","11110001010","10100110000","10100001100",
+  "10010110000","10010000110","10000101100","10000100110","10110010000",
+  "10110000100","10011010000","10011000010","10000110100","10000110010",
+  "11000010010","11001010000","11110111010","11000010100","10001111010",
+  "10100111100","10010111100","10010011110","10111100100","10011110100",
+  "10011110010","11110100100","11110010100","11110010010","11011011110",
+  "11011110110","11110110110","10101111000","10100011110","10001011110",
+  "10111101000","10111100010","11110101000","11110100010","10111011110",
+  "10111101110","11101011110","11110101110","11010000100","11010010000",
+  "11010011100",
+];
+const CODE128_STOP_BINARY = "1100011101011";
+
+function binaryToWidths(bin) {
+  const w = []; let i = 0;
+  while (i < bin.length) {
+    const ch = bin[i]; let run = 0;
+    while (i < bin.length && bin[i] === ch) { run++; i++; }
+    w.push(run);
+  }
+  return w;
+}
+
+const CODE128_PATTERNS = CODE128_BINARY.map(binaryToWidths);
+const CODE128_STOP = binaryToWidths(CODE128_STOP_BINARY);
+
+function encodeCode128B(text) {
+  const START_B = 104;
+  let checksum = START_B;
+  const symbols = [CODE128_PATTERNS[START_B]];
+  for (let i = 0; i < text.length; i++) {
+    const val = text.charCodeAt(i) - 32;
+    if (val < 0 || val > 94) continue;
+    symbols.push(CODE128_PATTERNS[val]);
+    checksum += (i + 1) * val;
+  }
+  symbols.push(CODE128_PATTERNS[checksum % 103]);
+  symbols.push(CODE128_STOP);
+  return symbols.flat();
 }
 
 function formatDate(dateStr) {
@@ -394,67 +439,60 @@ function drawSheet(canvas, opts) {
     }
   }
 
-  // ── Student ID bubble grid ──
-  const idBubbleR = (ID_BUBBLE_DIAM_NORM * SHEET_W / 2) * S;
-  const idLabelY = (ID_TENS_Y * SHEET_H - 8) * S;
-
+  // ── Student ID barcode ──
   // Section divider
   ctx.strokeStyle = '#999';
   ctx.lineWidth = 0.5 * S;
   ctx.beginPath();
-  ctx.moveTo(ID_X0 * SHEET_W * S, (ID_TENS_Y * SHEET_H - 12) * S);
-  ctx.lineTo(ID_X1 * SHEET_W * S, (ID_TENS_Y * SHEET_H - 12) * S);
+  ctx.moveTo(BARCODE_X0 * SHEET_W * S, BARCODE_LABEL_Y * SHEET_H * S);
+  ctx.lineTo(BARCODE_X1 * SHEET_W * S, BARCODE_LABEL_Y * SHEET_H * S);
   ctx.stroke();
 
   // "STUDENT NO." label
   ctx.fillStyle = '#222';
   ctx.font = `bold ${5 * S}px Arial`;
   ctx.textAlign = 'left';
-  ctx.fillText('STUDENT NO.', ID_X0 * SHEET_W * S, idLabelY);
+  ctx.fillText('STUDENT NO.', BARCODE_X0 * SHEET_W * S, (BARCODE_LABEL_Y * SHEET_H - 3) * S);
 
-  // Digit headers (0-9)
-  ctx.fillStyle = '#444';
-  ctx.font = `bold ${4.5 * S}px Arial`;
-  ctx.textAlign = 'center';
-  for (let d = 0; d < ID_DIGIT_COUNT; d++) {
-    const { nx } = idBubbleCenter(0, d);
-    ctx.fillText(String(d), nx * SHEET_W * S, idLabelY);
-  }
-
-  // Row labels and bubbles
-  const idRowLabels = ['T', 'O'];
+  // Draw barcode if student number provided
   const studentNum = parseInt(opts.studentNumber);
-  const idTens = !isNaN(studentNum) ? Math.floor(studentNum / 10) % 10 : -1;
-  const idOnes = !isNaN(studentNum) ? studentNum % 10 : -1;
+  if (!isNaN(studentNum) && studentNum >= 0 && studentNum <= 99) {
+    const text = String(studentNum).padStart(2, '0');
+    const widths = encodeCode128B(text);
+    const totalUnits = widths.reduce((a, b) => a + b, 0);
+    const quietZone = 10;
+    const fullUnits = quietZone * 2 + totalUnits;
 
-  for (let row = 0; row < 2; row++) {
-    const { ny } = idBubbleCenter(row, 0);
-    const cy = ny * SHEET_H * S;
+    const regionX = BARCODE_X0 * SHEET_W * S;
+    const regionY = BARCODE_Y0 * SHEET_H * S;
+    const regionW = (BARCODE_X1 - BARCODE_X0) * SHEET_W * S;
+    const regionH = (BARCODE_Y1 - BARCODE_Y0) * SHEET_H * S;
+    const unitPx = regionW / fullUnits;
 
-    // Row label
-    ctx.fillStyle = '#666';
-    ctx.font = `bold ${4.5 * S}px Arial`;
-    ctx.textAlign = 'right';
-    ctx.fillText(idRowLabels[row], (ID_X0 * SHEET_W - 4) * S, cy + 1.5 * S);
-
-    // Bubbles
-    const filledDigit = row === 0 ? idTens : idOnes;
-    for (let d = 0; d < ID_DIGIT_COUNT; d++) {
-      const { nx, ny: by } = idBubbleCenter(row, d);
-      const cx = nx * SHEET_W * S;
-      const bcy = by * SHEET_H * S;
-
-      ctx.beginPath();
-      ctx.arc(cx, bcy, idBubbleR, 0, Math.PI * 2);
-      if (d === filledDigit) {
-        ctx.fillStyle = '#1a1a1a';
-        ctx.fill();
-      } else {
-        ctx.strokeStyle = '#333';
-        ctx.lineWidth = 1.2 * S;
-        ctx.stroke();
+    let x = regionX + quietZone * unitPx;
+    let isBar = true;
+    for (const w of widths) {
+      if (isBar) {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(x, regionY, w * unitPx, regionH);
       }
+      x += w * unitPx;
+      isBar = !isBar;
     }
+
+    // Human-readable number below barcode
+    ctx.fillStyle = '#333';
+    ctx.font = `${5 * S}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.fillText(text, ((BARCODE_X0 + BARCODE_X1) / 2) * SHEET_W * S, (BARCODE_Y1 * SHEET_H + 6) * S);
+  } else {
+    // Empty placeholder
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 0.5 * S;
+    ctx.setLineDash([3 * S, 3 * S]);
+    ctx.strokeRect(BARCODE_X0 * SHEET_W * S, BARCODE_Y0 * SHEET_H * S,
+      (BARCODE_X1 - BARCODE_X0) * SHEET_W * S, (BARCODE_Y1 - BARCODE_Y0) * SHEET_H * S);
+    ctx.setLineDash([]);
   }
 
   // Footer

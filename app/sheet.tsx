@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { QuizQuestion, DEFAULT_QUIZ } from "@/lib/quiz-storage";
-import { computeGridLayout, SHEET_W, SHEET_H, idBubbleCenter, ID_DIGIT_COUNT, ID_BUBBLE_DIAM_NORM } from "@/lib/grid-layout";
+import { computeGridLayout, SHEET_W, SHEET_H } from "@/lib/grid-layout";
 
 // Registration mark: 20×20 black square, 9.6px from each edge
 const MARK_SIZE = 20;
@@ -35,10 +35,6 @@ export default function SheetScreen() {
 
   const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
   const layout = computeGridLayout(questions.length, choiceCount);
-
-  // Student ID bubble dimensions
-  const idBubbleD = ID_BUBBLE_DIAM_NORM * SHEET_W;
-  const idBubbleR = idBubbleD / 2;
 
   const bubbleD = layout.bubbleDiameterSheet;
   const bubbleR = bubbleD / 2;
@@ -166,58 +162,12 @@ export default function SheetScreen() {
             </React.Fragment>
           ))}
 
-          {/* Student ID bubble grid — bottom of sheet */}
+          {/* Student ID barcode region — bottom of sheet */}
           <View style={styles.idDivider} />
           <Text style={styles.idSectionLabel}>STUDENT NO.</Text>
-          {/* Digit column headers: 0–9 */}
-          {Array.from({ length: ID_DIGIT_COUNT }).map((_, d) => {
-            const { nx } = idBubbleCenter(0, d);
-            return (
-              <Text
-                key={`id-hdr-${d}`}
-                style={[
-                  styles.idDigitHeader,
-                  { left: nx * SHEET_W - 4, top: 0.855 * SHEET_H },
-                ]}
-              >
-                {d}
-              </Text>
-            );
-          })}
-          {/* Row labels + bubbles */}
-          {([0, 1] as const).map((row) => (
-            <React.Fragment key={`id-row-${row}`}>
-              <Text
-                style={[
-                  styles.idRowLabel,
-                  {
-                    left: 0.08 * SHEET_W,
-                    top: idBubbleCenter(row, 0).ny * SHEET_H - idBubbleR - 1,
-                  },
-                ]}
-              >
-                {row === 0 ? "T" : "O"}
-              </Text>
-              {Array.from({ length: ID_DIGIT_COUNT }).map((_, d) => {
-                const { nx, ny } = idBubbleCenter(row, d);
-                return (
-                  <View
-                    key={`id-${row}-${d}`}
-                    style={[
-                      styles.idBubble,
-                      {
-                        left: nx * SHEET_W - idBubbleR,
-                        top: ny * SHEET_H - idBubbleR,
-                        width: idBubbleD,
-                        height: idBubbleD,
-                        borderRadius: idBubbleR,
-                      },
-                    ]}
-                  />
-                );
-              })}
-            </React.Fragment>
-          ))}
+          <View style={styles.barcodePlaceholder}>
+            <View style={styles.barcodePlaceholderInner} />
+          </View>
 
           <Text style={styles.sheetFooter}>
             Fill circles completely with dark pencil or pen
@@ -403,27 +353,23 @@ const styles = StyleSheet.create({
     color: "#222",
     letterSpacing: 0.5,
   },
-  idDigitHeader: {
+  barcodePlaceholder: {
     position: "absolute",
-    width: 8,
-    textAlign: "center",
-    fontSize: 5.5,
-    fontWeight: "700",
-    color: "#000",
+    top: 0.855 * SHEET_H,
+    left: 0.25 * SHEET_W,
+    width: 0.50 * SHEET_W,
+    height: 0.045 * SHEET_H,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderStyle: "dashed",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  idRowLabel: {
-    position: "absolute",
-    fontSize: 5,
-    fontWeight: "600",
-    color: "#666",
-    textAlign: "center",
-    width: 8,
-  },
-  idBubble: {
-    position: "absolute",
-    borderWidth: 1.2,
-    borderColor: "#000000",
-    backgroundColor: "#FFFFFF",
+  barcodePlaceholderInner: {
+    width: "60%",
+    height: "60%",
+    backgroundColor: "#eee",
+    borderRadius: 2,
   },
   sheetFooter: {
     position: "absolute",
