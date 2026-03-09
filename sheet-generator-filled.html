@@ -513,6 +513,15 @@ function showAnswerKey(data, questionCount) {
   }
   html += '</div>';
 
+  // Answer distribution summary
+  const letters = data.correct[0] && 'ABCDE'.includes(data.correct[0]) ? (data.correct.some(l => l === 'E') ? ['A','B','C','D','E'] : ['A','B','C','D']) : ['A','B','C','D'];
+  const counts = {};
+  letters.forEach(l => counts[l] = 0);
+  data.student.forEach(l => counts[l] = (counts[l] || 0) + 1);
+  html += `<div style="margin-bottom:8px;font-size:12px;color:#555"><strong>Distribution:</strong> `;
+  html += letters.map(l => `${counts[l]}-${l}`).join('  ');
+  html += '</div>';
+
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(55px,1fr));gap:2px 6px;font-size:11px;font-family:monospace">';
   for (let i = 0; i < questionCount; i++) {
     const isWrong = data.wrongIndices.includes(i);
