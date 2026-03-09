@@ -19,6 +19,8 @@ import { computeGridLayout, SHEET_W, SHEET_H } from "@/lib/grid-layout";
 const MARK_SIZE = 20;
 const MARK_OFFSET_X = 9.6;
 const MARK_OFFSET_Y = 18;
+// Midpoint bars: 20×8 thin bars — aspect 0.4 fails contour detector's ≥0.5 filter
+const MID_BAR_H = 8;
 
 export default function SheetScreen() {
   const insets = useSafeAreaInsets();
@@ -77,6 +79,10 @@ export default function SheetScreen() {
           <View style={[styles.regMark, { left: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { right: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
 
+          {/* Midpoint bars — validation marks at left & right edges */}
+          <View style={[styles.regBar, { left: MARK_OFFSET_X, top: (SHEET_H - MID_BAR_H) / 2 }]} />
+          <View style={[styles.regBar, { right: MARK_OFFSET_X, top: (SHEET_H - MID_BAR_H) / 2 }]} />
+
           {/* Header bar — bordered */}
           <View style={styles.headerBar}>
             <Text style={styles.brandText}>GRADESNAP</Text>
@@ -84,16 +90,14 @@ export default function SheetScreen() {
             <Text style={styles.sheetSubtitle}>
               {questions.length} Question{questions.length !== 1 ? "s" : ""} · {choiceCount} Choices
             </Text>
-
-            {/* QR code inside header bar */}
-            {qrPayload ? (
-              <View style={styles.qrContainer}>
-                <View style={styles.qrBg}>
-                  <QRCode value={qrPayload} size={30} level="M" />
-                </View>
-              </View>
-            ) : null}
           </View>
+
+          {/* QR code — top-right, outside header bar */}
+          {qrPayload ? (
+            <View style={styles.qrContainer}>
+              <QRCode value={qrPayload} size={50} level="L" />
+            </View>
+          ) : null}
 
           {/* Student name line */}
           <Text style={styles.studentName}>
@@ -255,11 +259,17 @@ const styles = StyleSheet.create({
     height: MARK_SIZE,
     backgroundColor: "#000000",
   },
+  regBar: {
+    position: "absolute",
+    width: MARK_SIZE,
+    height: MID_BAR_H,
+    backgroundColor: "#000000",
+  },
   headerBar: {
     position: "absolute",
     top: 50,
     left: 32,
-    right: 32,
+    right: 96,
     height: 38,
     backgroundColor: "#fff",
     borderWidth: 1.5,
@@ -289,17 +299,17 @@ const styles = StyleSheet.create({
   },
   qrContainer: {
     position: "absolute",
-    top: 3,
-    right: 4,
-  },
-  qrBg: {
+    top: 50,
+    right: 34,
     backgroundColor: "#fff",
-    padding: 2,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: "#000",
     borderRadius: 2,
   },
   studentName: {
     position: "absolute",
-    top: 94,
+    top: 112,
     left: 36,
     fontSize: 7,
     color: "#333",
@@ -307,7 +317,7 @@ const styles = StyleSheet.create({
   },
   divider: {
     position: "absolute",
-    top: 110,
+    top: 126,
     left: 32,
     right: 32,
     height: 1,
@@ -315,7 +325,7 @@ const styles = StyleSheet.create({
   },
   dividerLabel: {
     position: "absolute",
-    top: 115,
+    top: 130,
     left: 32,
     fontSize: 7,
     fontWeight: "700",

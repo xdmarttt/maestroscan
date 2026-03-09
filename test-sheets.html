@@ -156,7 +156,7 @@ function generateAnswers(questionCount, choiceCount) {
 
 // ── Draw QR code on canvas ──────────────────────────────────────────────────
 function drawQRCode(ctx, text, x, y, size) {
-  const qr = qrcode(0, 'M');
+  const qr = qrcode(0, 'L');
   qr.addData(text);
   qr.make();
   const moduleCount = qr.getModuleCount();
@@ -200,6 +200,10 @@ function drawSheet(canvas, questionCount, choiceCount = 4) {
   for (const m of MARKS) {
     ctx.fillRect(m.x * s, m.y * s, MARK_SIZE * s, MARK_SIZE * s);
   }
+  // Midpoint bars — thin 20×8 at left & right edges for validation
+  const MID_BAR_H = 8, midY = (SHEET_H - MID_BAR_H) / 2;
+  ctx.fillRect(9.6 * s, midY * s, MARK_SIZE * s, MID_BAR_H * s);
+  ctx.fillRect((SHEET_W - 9.6 - MARK_SIZE) * s, midY * s, MARK_SIZE * s, MID_BAR_H * s);
 
   // Title — matches sheet.tsx (top: 44, 60)
   ctx.fillStyle = '#000';
@@ -211,14 +215,18 @@ function drawSheet(canvas, questionCount, choiceCount = 4) {
   ctx.font = `${8 * s}px Arial`;
   ctx.fillText(`Answer Sheet  \u2022  ${questionCount} Questions`, (SHEET_W / 2) * s, 50 * s);
 
-  // QR code — top-right area (matches sheet.tsx: right:45, top:15, size:55)
+  // QR code — top-right, outside header bar
   const studentName = studentNameForCount(questionCount);
   const quizId = 'test' + questionCount;
   const qrPayload = `GS:${quizId}:${studentName}`;
-  const qrSize = 38 * s;
-  const qrX = (SHEET_W - 45 - 55) * s;
-  const qrY = 15 * s;
-  drawQRCode(ctx, qrPayload, qrX, qrY, qrSize);
+  const qrSize = 50, qrPad = 3;
+  const qrX = SHEET_W - 34 - qrSize - qrPad * 2;
+  const qrY = 50;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(qrX * s, qrY * s, (qrSize + qrPad * 2) * s, (qrSize + qrPad * 2) * s);
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1 * s;
+  ctx.strokeRect(qrX * s, qrY * s, (qrSize + qrPad * 2) * s, (qrSize + qrPad * 2) * s);
+  drawQRCode(ctx, qrPayload, (qrX + qrPad) * s, (qrY + qrPad) * s, qrSize * s);
 
   // Student name — matches sheet.tsx: top:74, left:40
   ctx.fillStyle = '#333';

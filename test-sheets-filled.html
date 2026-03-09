@@ -101,7 +101,7 @@ const MARKS = [
 
 // ── QR helper ───────────────────────────────────────────────────────────────
 function drawQR(ctx, text, x, y, size) {
-  const qr = qrcode(0, 'M');
+  const qr = qrcode(0, 'L');
   qr.addData(text);
   qr.make();
   const mc = qr.getModuleCount();
@@ -155,6 +155,10 @@ function drawSheet(canvas, questionCount, choiceCount) {
   // Registration marks
   ctx.fillStyle = '#000';
   for (const m of MARKS) ctx.fillRect(m.x * S, m.y * S, MARK_SIZE * S, MARK_SIZE * S);
+  // Midpoint bars — thin 20×8 at left & right edges for validation
+  const MID_BAR_H = 8, midY = (SHEET_H - MID_BAR_H) / 2;
+  ctx.fillRect(9.6 * S, midY * S, MARK_SIZE * S, MID_BAR_H * S);
+  ctx.fillRect((SHEET_W - 9.6 - MARK_SIZE) * S, midY * S, MARK_SIZE * S, MID_BAR_H * S);
 
   // Header bar (bordered, no fill)
   const barY = 50, barH = 38, barX = 32, barW = SHEET_W - 64;
@@ -182,13 +186,20 @@ function drawSheet(canvas, questionCount, choiceCount) {
   const studentName = studentNameForCount(questionCount);
   const quizId = 'test' + questionCount;
   const qrPayload = `GS:${quizId}:${studentName}`;
-  const qrSize = 30, qrX = barX + barW - qrSize - 6, qrY = barY + 4;
-  drawQR(ctx, qrPayload, qrX * S, qrY * S, qrSize * S);
+  // QR code — top-right, outside header bar
+  const qrSize = 50, qrPad = 3;
+  const qrX = SHEET_W - 34 - qrSize - qrPad * 2;
+  const qrY2 = 50;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(qrX * S, qrY2 * S, (qrSize + qrPad * 2) * S, (qrSize + qrPad * 2) * S);
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1 * S;
+  ctx.strokeRect(qrX * S, qrY2 * S, (qrSize + qrPad * 2) * S, (qrSize + qrPad * 2) * S);
+  drawQR(ctx, qrPayload, (qrX + qrPad) * S, (qrY2 + qrPad) * S, qrSize * S);
 
   ctx.fillStyle = '#666';
   ctx.font = `bold ${4 * S}px Arial`;
   ctx.textAlign = 'center';
-  ctx.fillText('SCAN TO GRADE', (qrX + qrSize / 2) * S, (barY + barH + 7) * S);
+  ctx.fillText('SCAN TO GRADE', (qrX + qrSize / 2 + qrPad) * S, (qrY2 + qrSize + qrPad * 2 + 6) * S);
   ctx.textAlign = 'left';
 
   // Student info table

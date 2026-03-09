@@ -76,6 +76,7 @@ const IDEAL_CORNERS: [number, number][] = [
   [(300.4 / 320) * WARP_W, (422.0 / 450) * WARP_H], // BR ≈ [751, 1050]
 ];
 
+
 // ── Ring pixel helpers (pure JS — only cross-bridge once for pixel buffer) ───
 
 function ringMean(
@@ -344,11 +345,11 @@ function findFourMarks(
 // ── QR code decoding ─────────────────────────────────────────────────────────
 
 // QR scan region in normalized sheet coordinates (top-right area)
-// Header bar at y=50-88 on 320×450, QR at top-right corner of header
-const QR_NX0 = 0.58;
-const QR_NX1 = 0.95;
-const QR_NY0 = 0.08;
-const QR_NY1 = 0.26;
+// 50px QR at top-right (right:34, top:50) — QR-first: must decode to allow scan
+const QR_NX0 = 0.62;
+const QR_NX1 = 0.96;
+const QR_NY0 = 0.06;
+const QR_NY1 = 0.28;
 
 /**
  * Decode a QR code from the top-right region of the detected sheet.
@@ -367,7 +368,7 @@ function decodeSheetQR(
     const detectedFlat = corners.flatMap(([x, y]) => [x, y]);
     const invPersp = PerspT(idealFlat, detectedFlat);
 
-    // Full resolution rectified output for reliable QR decoding
+    // Full resolution rectified QR region (~57K perspective transforms, still fast)
     const outW = Math.round((QR_NX1 - QR_NX0) * WARP_W);
     const outH = Math.round((QR_NY1 - QR_NY0) * WARP_H);
     if (outW < 10 || outH < 10) return null;
@@ -378,15 +379,25 @@ function decodeSheetQR(
     const wxBase = QR_NX0 * WARP_W;
     const wyBase = QR_NY0 * WARP_H;
 
+    // Bilinear interpolation for smoother QR sampling (reduces aliasing)
     for (let y = 0; y < outH; y++) {
       for (let x = 0; x < outW; x++) {
         const [ix, iy] = invPersp.transform(wxBase + x, wyBase + y);
-        const px = Math.round(ix);
-        const py = Math.round(iy);
-        gray[y * outW + x] =
-          px >= 0 && px < W && py >= 0 && py < H
-            ? pixels[py * W + px]
-            : 255;
+        const x0 = Math.floor(ix), y0 = Math.floor(iy);
+        const x1 = x0 + 1, y1 = y0 + 1;
+        if (x0 < 0 || x1 >= W || y0 < 0 || y1 >= H) {
+          gray[y * outW + x] = 255;
+          continue;
+        }
+        const fx = ix - x0, fy = iy - y0;
+        const p00 = pixels[y0 * W + x0];
+        const p10 = pixels[y0 * W + x1];
+        const p01 = pixels[y1 * W + x0];
+        const p11 = pixels[y1 * W + x1];
+        gray[y * outW + x] = Math.round(
+          p00 * (1 - fx) * (1 - fy) + p10 * fx * (1 - fy) +
+          p01 * (1 - fx) * fy + p11 * fx * fy
+        );
       }
     }
 
@@ -397,19 +408,52 @@ function decodeSheetQR(
       if (gray[i] > gMax) gMax = gray[i];
     }
     const gRange = gMax - gMin || 1;
-
-    // Convert to RGBA with contrast normalization (jsQR needs Uint8ClampedArray RGBA)
-    const rgba = new Uint8ClampedArray(outW * outH * 4);
     for (let i = 0; i < gray.length; i++) {
-      const v = Math.round(((gray[i] - gMin) / gRange) * 255);
-      const j = i * 4;
-      rgba[j] = v;
-      rgba[j + 1] = v;
-      rgba[j + 2] = v;
-      rgba[j + 3] = 255;
+      gray[i] = Math.round(((gray[i] - gMin) / gRange) * 255);
     }
 
-    const result = jsQR(rgba, outW, outH);
+    // Helper: gray → RGBA with white padding (quiet zone for jsQR finder patterns)
+    const PAD = 16;
+    const padW = outW + PAD * 2, padH = outH + PAD * 2;
+    const toRGBA = (src: Uint8Array) => {
+      const out = new Uint8ClampedArray(padW * padH * 4);
+      out.fill(255); // white background (quiet zone)
+      for (let y = 0; y < outH; y++) {
+        for (let x = 0; x < outW; x++) {
+          const v = src[y * outW + x];
+          const j = ((y + PAD) * padW + (x + PAD)) * 4;
+          out[j] = v; out[j + 1] = v; out[j + 2] = v; out[j + 3] = 255;
+        }
+      }
+      return out;
+    };
+
+    // Try 1: normalized grayscale
+    let result = jsQR(toRGBA(gray), padW, padH);
+
+    // Try 2: Otsu binarization (sharp B&W) — helps when camera produces soft edges
+    if (!result) {
+      // Compute Otsu threshold
+      const hist = new Int32Array(256);
+      for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
+      const total = gray.length;
+      let sumAll = 0;
+      for (let i = 0; i < 256; i++) sumAll += i * hist[i];
+      let sumB = 0, wB = 0, maxVar = 0, threshold = 128;
+      for (let t = 0; t < 256; t++) {
+        wB += hist[t];
+        if (wB === 0) continue;
+        const wF = total - wB;
+        if (wF === 0) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+        const v = wB * wF * (mB - mF) * (mB - mF);
+        if (v > maxVar) { maxVar = v; threshold = t; }
+      }
+      const bin = new Uint8Array(gray.length);
+      for (let i = 0; i < gray.length; i++) bin[i] = gray[i] > threshold ? 255 : 0;
+      result = jsQR(toRGBA(bin), padW, padH);
+    }
     console.log(`[QR] rectified=${outW}x${outH} decoded=${result?.data ?? 'null'}`);
     if (!result?.data) return null;
 
@@ -640,8 +684,8 @@ export async function detectAndScan(
     pixels[i] = Math.round(((rawPixels[i] - pMin) / pRange) * 255);
   }
 
-  // Decode QR code from sheet — use rawPixels (QR decoder does its own normalization)
-  const qrResult = decodeSheetQR(rawPixels, W, H, corners);
+  // Try QR decode — if it works, sheet is confirmed real
+  const qrResult = decodeSheetQR(pixels, W, H, corners);
 
   // Use PerspT to map bubble positions from warped space → original image space.
   const layout = computeGridLayout(questions.length, choiceCount);
@@ -660,6 +704,22 @@ export async function detectAndScan(
   const adjInnerR = Math.max(3, Math.round(layout.innerR * radiusScale));
   const adjOuterR1 = Math.max(adjInnerR + 1, Math.round(layout.outerR1 * radiusScale));
   const adjOuterR2 = Math.max(adjOuterR1 + 1, Math.round(layout.outerR2 * radiusScale));
+
+  // If no QR, validate midpoint bars to prevent hallucinations
+  if (!qrResult) {
+    const MID_Y_WARPED = (225 / 450) * WARP_H;
+    const midpoints: [number, number][] = [
+      [IDEAL_CORNERS[0][0], MID_Y_WARPED],
+      [IDEAL_CORNERS[1][0], MID_Y_WARPED],
+    ];
+    const midR = Math.max(3, Math.round(4 * radiusScale));
+    for (const [mx, my] of midpoints) {
+      const [ix, iy] = invPersp.transform(mx, my);
+      if (ringMean(pixels, W, H, ix, iy, 0, midR) > 200) {
+        return { found: false };
+      }
+    }
+  }
 
   const answers: string[] = [];
   const confidence: number[] = [];

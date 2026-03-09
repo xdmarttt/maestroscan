@@ -142,7 +142,7 @@ export default function ScannerScreen() {
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.7,
         base64: false,
-        skipProcessing: false,
+        skipProcessing: true,
       });
       const t1 = Date.now();
       const framePos = await getFramePos();

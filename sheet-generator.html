@@ -211,7 +211,7 @@ const MARKS = [
 
 // ── QR helper ───────────────────────────────────────────────────────────────
 function drawQR(ctx, text, x, y, size) {
-  const qr = qrcode(0, 'M');
+  const qr = qrcode(0, 'L');
   qr.addData(text);
   qr.make();
   const mc = qr.getModuleCount();
@@ -253,6 +253,10 @@ function drawSheet(canvas, opts) {
   for (const m of MARKS) {
     ctx.fillRect(m.x * S, m.y * S, MARK_SIZE * S, MARK_SIZE * S);
   }
+  // Midpoint bars — thin 20×8 at left & right edges for validation
+  const MID_BAR_H = 8, midY = (SHEET_H - MID_BAR_H) / 2;
+  ctx.fillRect(9.6 * S, midY * S, MARK_SIZE * S, MID_BAR_H * S);
+  ctx.fillRect((SHEET_W - 9.6 - MARK_SIZE) * S, midY * S, MARK_SIZE * S, MID_BAR_H * S);
 
   // ── Header bar (bordered, no fill) ──
   const barY = 50, barH = 38;
@@ -283,20 +287,27 @@ function drawSheet(canvas, opts) {
   const detailLine = [opts.quizTitle, opts.totalPoints ? opts.totalPoints + ' pts' : '', opts.dateStr].filter(Boolean).join(' · ');
   ctx.fillText(detailLine, (barX + 8) * S, (barY + 37) * S);
 
-  // QR code in header bar
-  const qrSize = 30;
-  const qrX = barX + barW - qrSize - 6;
-  const qrY = barY + 4;
+  // QR code — top-right, outside header bar
+  const qrSize = 50;
+  const qrPad = 3;
+  const qrX = SHEET_W - 34 - qrSize - qrPad * 2;
+  const qrY = 50;
   const qrPayload = opts.studentName
     ? `GS:${opts.quizId || 'quiz'}:${opts.studentName}`
     : `GS:${opts.quizId || 'quiz'}:${opts.quizTitle || 'sheet'}`;
-  drawQR(ctx, qrPayload, qrX * S, qrY * S, qrSize * S);
+  // White bg + border
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(qrX * S, qrY * S, (qrSize + qrPad * 2) * S, (qrSize + qrPad * 2) * S);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 1 * S;
+  ctx.strokeRect(qrX * S, qrY * S, (qrSize + qrPad * 2) * S, (qrSize + qrPad * 2) * S);
+  drawQR(ctx, qrPayload, (qrX + qrPad) * S, (qrY + qrPad) * S, qrSize * S);
 
   // "SCAN TO GRADE" label
   ctx.fillStyle = '#666';
   ctx.font = `bold ${4 * S}px Arial`;
   ctx.textAlign = 'center';
-  ctx.fillText('SCAN TO GRADE', (qrX + qrSize / 2) * S, (barY + barH + 7) * S);
+  ctx.fillText('SCAN TO GRADE', (qrX + qrSize / 2 + qrPad) * S, (qrY + qrSize + qrPad * 2 + 6) * S);
   ctx.textAlign = 'left';
 
   // ── Student info table ──
