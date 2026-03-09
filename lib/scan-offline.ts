@@ -329,7 +329,7 @@ function findFourMarks(
 
     // Pick largest dark candidate — corners (20×20) are bigger than midpoints (10×10)
     const darkEnough = inQ.filter(
-      (c) => ringMean(pixels, W, H, c.cx, c.cy, 0, 8) < 160
+      (c) => ringMean(pixels, W, H, c.cx, c.cy, 0, 8) < 190
     );
     if (darkEnough.length === 0) { partial.push(null); cornerDarkness.push(999); continue; }
     const best = darkEnough.reduce((a, b) => (b.area > a.area ? b : a));
@@ -343,7 +343,7 @@ function findFourMarks(
 
   // All 4 corners must be genuinely dark — reject random objects
   for (const d of cornerDarkness) {
-    if (d > 160) return { corners: null, partial };
+    if (d > 190) return { corners: null, partial };
   }
 
   const [tl, tr, bl, br] = partial as [
@@ -376,7 +376,7 @@ function findFourMarks(
   const centerY = (tl[1] + tr[1] + bl[1] + br[1]) / 4;
   const centerBright = ringMean(pixels, W, H, centerX, centerY, 0, 16);
   const avgCornerDark = cornerDarkness.reduce((a, b) => a + b, 0) / 4;
-  if (centerBright - avgCornerDark < 40) return { corners: null, partial };
+  if (centerBright - avgCornerDark < 25) return { corners: null, partial };
 
   return { corners: [tl, tr, bl, br], partial };
 }

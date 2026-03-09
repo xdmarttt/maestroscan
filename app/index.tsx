@@ -35,8 +35,8 @@ import { detectAndScan, detectSheet, scanSheet, generateDebugImage, warmupOpenCV
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // Edge-to-edge viewfinder — teachers fill the camera with the paper (like ZipGrade)
 const FRAME_W = SCREEN_WIDTH;
-const FRAME_H = Math.min(FRAME_W * 1.4, SCREEN_HEIGHT * 0.55);
-const TARGET_SIZE = 80;
+const FRAME_H = Math.min(FRAME_W * 1.4, SCREEN_HEIGHT * 0.65);
+const TARGET_SIZE = 110;
 const CROP_MARGIN = 0.08; // must match cropToFrame default margin
 
 // Target box rects in frame-relative coordinates [TL, TR, BL, BR]
@@ -151,7 +151,7 @@ export default function ScannerScreen() {
   const stableCountRef = useRef(0);
   const [waitingForClear, setWaitingForClear] = useState(false); // UI state for "remove sheet" message
   const waitForClearRef = useRef(false); // ref mirror for detection loop
-  const STABLE_THRESHOLD = 1; // fire immediately when all 4 corners lock
+  const STABLE_THRESHOLD = 3; // require 3 consecutive frames with all 4 corners locked
 
   // Pre-load native OpenCV on mount to avoid lag on first detection frame
   useEffect(() => { warmupOpenCV(); }, []);
