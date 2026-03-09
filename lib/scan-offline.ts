@@ -274,6 +274,14 @@ function findFourMarks(
 
   if (candidates.length < 4) return null;
 
+  // Filter out small candidates (midpoints are 10×10, corners are 20×20).
+  // Keep only candidates whose area is at least 40% of the largest candidate.
+  const maxCandArea = Math.max(...candidates.map(c => c.area));
+  const filtered = candidates.filter(c => c.area >= maxCandArea * 0.4);
+  if (filtered.length < 4) return null;
+  candidates.length = 0;
+  candidates.push(...filtered);
+
   // Scale candidates back to original image coordinates
   if (needScale) {
     const invScale = 1 / scale;
