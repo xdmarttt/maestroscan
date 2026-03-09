@@ -165,36 +165,6 @@ export default function ScannerScreen() {
       setIsScanning(true);
       setScanDone(true);
 
-      // Crop debug image tighter to the detected sheet (bounding box of corners + 5% margin)
-      // Also adjust corner coordinates and imageSize to match the cropped image
-      let sheetImage = b64;
-      let finalCorners = result.corners;
-      let finalImageSize = result.imageSize;
-      try {
-        const cs = result.corners;
-        const [imgW, imgH] = result.imageSize;
-        if (cs.length === 4 && imgW > 0 && imgH > 0) {
-          const xs = cs.map((c: number[]) => c[0]);
-          const ys = cs.map((c: number[]) => c[1]);
-          const pad = Math.max(imgW, imgH) * 0.05;
-          const cx0 = Math.max(0, Math.min(...xs) - pad);
-          const cy0 = Math.max(0, Math.min(...ys) - pad);
-          const cx1 = Math.min(imgW, Math.max(...xs) + pad);
-          const cy1 = Math.min(imgH, Math.max(...ys) + pad);
-          const cropped = await ImageManipulator.manipulateAsync(
-            `data:image/jpeg;base64,${b64}`,
-            [{ crop: { originX: Math.round(cx0), originY: Math.round(cy0), width: Math.round(cx1 - cx0), height: Math.round(cy1 - cy0) } }],
-            { compress: 0.85, format: ImageManipulator.SaveFormat.JPEG, base64: true },
-          );
-          if (cropped.base64) {
-            sheetImage = cropped.base64;
-            // Translate corners to cropped coordinate space
-            finalCorners = cs.map((c: number[]) => [c[0] - cx0, c[1] - cy0]) as [number, number][];
-            finalImageSize = [cx1 - cx0, cy1 - cy0] as [number, number];
-          }
-        }
-      } catch { /* fall back to full frame */ }
-
       // Brief pause so user sees green feedback before navigation
       await new Promise((r) => setTimeout(r, 200));
       router.push({
@@ -203,9 +173,6 @@ export default function ScannerScreen() {
           answers: JSON.stringify(result.answers),
           questions: JSON.stringify(questions),
           choiceCount: String(choiceCount),
-          corners: JSON.stringify(finalCorners),
-          imageSize: JSON.stringify(finalImageSize),
-          debugImage: sheetImage,
           ...(result.studentId !== undefined ? { studentId: String(result.studentId) } : {}),
         },
       });

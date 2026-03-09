@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
-  Image,
   StyleSheet,
   ScrollView,
   Pressable,
@@ -25,10 +24,7 @@ import Animated, {
 import * as Haptics from "expo-haptics";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
-import { computeGridLayout, WARP_W, WARP_H } from "@/lib/grid-layout";
 import { loadRoster } from "@/lib/quiz-storage";
-// @ts-ignore — no type definitions
-import PerspT from "perspective-transform";
 
 interface Question {
   id: number;
@@ -183,11 +179,9 @@ export default function ResultsScreen() {
 
   const answers: string[] = JSON.parse((params.answers as string) || "[]");
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
-  const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
   const studentIdParam = params.studentId as string | undefined;
   const studentId = studentIdParam !== undefined ? parseInt(studentIdParam, 10) : null;
   const [studentName, setStudentName] = useState("");
-  const debugImage = params.debugImage as string | undefined;
 
   // Look up student name from roster by ID
   useEffect(() => {
@@ -200,49 +194,6 @@ export default function ResultsScreen() {
       }
     });
   }, [studentId]);
-  const corners: [number, number][] = JSON.parse((params.corners as string) || "[]");
-  const imageSize: [number, number] = JSON.parse((params.imageSize as string) || "[0,0]");
-  const layout = computeGridLayout(questions.length, choiceCount);
-
-  // Build perspective transform: warped sheet coords → image pixel coords → percentage
-  // IDEAL_CORNERS in warped space (must match scan-offline.ts)
-  const IDEAL_CORNERS: [number, number][] = [
-    [(19.6 / 320) * WARP_W, (28.0 / 450) * WARP_H],
-    [(300.4 / 320) * WARP_W, (28.0 / 450) * WARP_H],
-    [(19.6 / 320) * WARP_W, (422.0 / 450) * WARP_H],
-    [(300.4 / 320) * WARP_W, (422.0 / 450) * WARP_H],
-  ];
-  const hasCorners = corners.length === 4 && imageSize[0] > 0;
-  // Maps warped space → image pixel space (inverse of the scan transform)
-  const perspTransform = hasCorners
-    ? PerspT(
-        IDEAL_CORNERS.flatMap(([x, y]) => [x, y]),
-        corners.flatMap(([x, y]) => [x, y]),
-      )
-    : null;
-
-  // Scale overlay bubble size based on question density
-  const bubbleOverlaySize = Math.max(8, Math.min(28, Math.round(28 * (5 / Math.max(5, questions.length)) ** 0.5)));
-  const bubbleOverlayRadius = bubbleOverlaySize / 2;
-
-  function bubbleToImagePct(q: number, c: number) {
-    if (!perspTransform || !hasCorners) return null;
-    const { nx, ny } = layout.bubbleCenter(q, c);
-    const [ix, iy] = perspTransform.transform(nx * WARP_W, ny * WARP_H);
-    return {
-      left: `${(ix / imageSize[0]) * 100}%` as const,
-      top: `${(iy / imageSize[1]) * 100}%` as const,
-    };
-  }
-
-  function cornerToImagePct(idx: number) {
-    if (!hasCorners) return null;
-    return {
-      left: `${(corners[idx][0] / imageSize[0]) * 100}%` as const,
-      top: `${(corners[idx][1] / imageSize[1]) * 100}%` as const,
-    };
-  }
-
   const score = answers.filter((a, i) => a === questions[i]?.correct).length;
   const percentage = Math.round((score / questions.length) * 100);
 
@@ -273,59 +224,6 @@ export default function ResultsScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: bottomPad + 24 }]}
         showsVerticalScrollIndicator={false}
       >
-        {debugImage && (
-          <Animated.View entering={FadeInDown.duration(400)} style={styles.debugImageWrap}>
-            <Text style={styles.debugImageLabel}>Scanned Sheet</Text>
-            <View style={[styles.debugImageContainer, hasCorners && { aspectRatio: imageSize[0] / imageSize[1] }]}>
-              <Image
-                source={{ uri: `data:image/jpeg;base64,${debugImage}` }}
-                style={styles.debugImage}
-                resizeMode="contain"
-              />
-              {/* Bubble grid overlay — green = detected answer, red = other options */}
-              {hasCorners && Array.from({ length: layout.questionCount }).map((_, q) =>
-                layout.letters.map((letter, c) => {
-                  const pos = bubbleToImagePct(q, c);
-                  if (!pos) return null;
-                  const isDetected = answers[q] === letter;
-                  return (
-                    <View
-                      key={`${q}-${c}`}
-                      style={[
-                        styles.bubbleCircle,
-                        {
-                          left: pos.left,
-                          top: pos.top,
-                          width: bubbleOverlaySize,
-                          height: bubbleOverlaySize,
-                          borderRadius: bubbleOverlayRadius,
-                          marginLeft: -bubbleOverlayRadius,
-                          marginTop: -bubbleOverlayRadius,
-                          borderColor: isDetected ? "#00e676" : "#ff1744",
-                          backgroundColor: isDetected ? "rgba(0,230,118,0.25)" : "transparent",
-                        },
-                      ]}
-                    >
-                      {bubbleOverlaySize >= 16 && (
-                        <Text style={[
-                          styles.bubbleLabel,
-                          { color: isDetected ? "#00e676" : "#ff1744", fontSize: Math.max(6, bubbleOverlaySize * 0.35) },
-                        ]}>{letter}</Text>
-                      )}
-                    </View>
-                  );
-                })
-              )}
-              {/* Registration mark indicators — detected corners */}
-              {[0, 1, 2, 3].map((i) => {
-                const pos = cornerToImagePct(i);
-                if (!pos) return null;
-                return <View key={`mark-${i}`} style={[styles.markIndicator, pos]} />;
-              })}
-            </View>
-          </Animated.View>
-        )}
-
         <Animated.View entering={FadeInDown.duration(400).delay(100)} style={styles.scoreSection}>
           {studentName ? (
             <View style={styles.studentBanner}>
@@ -693,56 +591,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Inter_700Bold",
     color: Colors.background,
-  },
-  debugImageWrap: {
-    backgroundColor: Colors.surface,
-    borderRadius: 16,
-    padding: 12,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  debugImageLabel: {
-    fontSize: 11,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.textSecondary,
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  debugImageContainer: {
-    position: "relative",
-    width: "100%",
-    aspectRatio: 800 / 1125,
-  },
-  debugImage: {
-    width: "100%",
-    height: "100%",
-    borderRadius: 8,
-    backgroundColor: Colors.surfaceElevated,
-  },
-  bubbleCircle: {
-    position: "absolute",
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 2,
-    marginLeft: -14,
-    marginTop: -14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  bubbleLabel: {
-    fontSize: 9,
-    fontFamily: "Inter_700Bold",
-  },
-  markIndicator: {
-    position: "absolute",
-    width: 12,
-    height: 12,
-    borderRadius: 2,
-    borderWidth: 2,
-    borderColor: "#ffab00",
-    marginLeft: -6,
-    marginTop: -6,
   },
 });
