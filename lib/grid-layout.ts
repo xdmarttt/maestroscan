@@ -129,7 +129,7 @@ export function computeGridLayout(
     innerR,
     outerR1,
     outerR2,
-    minRatio: 0.13,
-    minGap: 0.06,
+    minRatio: 0.08,
+    minGap: 0.04,
   };
 }

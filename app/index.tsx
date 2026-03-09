@@ -196,15 +196,14 @@ export default function ScannerScreen() {
     try {
       const t0 = Date.now();
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.3,
+        quality: 0.5,
         base64: false,
         skipProcessing: true,
       });
       const t1 = Date.now();
       const framePos = await getFramePos();
       if (!framePos) { resetCorners(); return; }
-      // Low-res crop — mark detection doesn't need quality (ZipGrade uses low qual too)
-      const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 480, 0.3);
+      const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 640, 0.5);
       const t2 = Date.now();
       if (!b64) { resetCorners(); return; }
 
@@ -247,7 +246,6 @@ export default function ScannerScreen() {
       stableCountRef.current++;
       if (stableCountRef.current < STABLE_THRESHOLD) return;
 
-      // Full scan on same image (detectAndScan re-detects marks internally, ~50ms overhead)
       const result = await detectAndScan(b64, questions, choiceCount);
       const t4 = Date.now();
       console.log(`[scan] fullScan=${t4-t3}ms total=${t4-t0}ms`);

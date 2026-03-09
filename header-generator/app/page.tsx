@@ -38,7 +38,7 @@ export default function Home() {
   };
 
   const handleExportPdf = async () => {
-    const headerDataUrl = canvasRef.current?.toDataURL();
+    const headerDataUrl = canvasRef.current?.toPreviewDataURL();
     if (!headerDataUrl) return;
     await generatePdf(headerDataUrl, 50, 4);
   };

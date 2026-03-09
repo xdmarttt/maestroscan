@@ -590,7 +590,7 @@ export async function detectAndScan(
     }
   }
 
-  // Single OpenCV session: decode → gray → detect → sample via PerspT
+  // Single OpenCV session: decode → gray → detect → warp → sample
   const bgrMat = OpenCV.base64ToMat(base64);
   const grayMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
   OpenCV.invoke("cvtColor", bgrMat, grayMat, ColorConversionCodes.COLOR_BGR2GRAY);
@@ -635,7 +635,10 @@ export async function detectAndScan(
   const adjOuterR1 = Math.max(adjInnerR + 1, Math.round(layout.outerR1 * radiusScale));
   const adjOuterR2 = Math.max(adjOuterR1 + 1, Math.round(layout.outerR2 * radiusScale));
 
-  // Sample answer bubbles via PerspT on original pixels
+  // Sample answer bubbles via PerspT on original pixels.
+  // Search a small neighborhood around each mapped position to find the actual
+  // bubble center — compensates for paper curvature shifting positions.
+  const searchStep = Math.max(2, Math.round(adjInnerR * 0.6));
   const answers: string[] = [];
   const confidence: number[] = [];
   for (let q = 0; q < layout.questionCount; q++) {
@@ -643,8 +646,16 @@ export async function detectAndScan(
     for (let c = 0; c < layout.choiceCount; c++) {
       const { nx, ny } = layout.bubbleCenter(q, c);
       const [ix, iy] = invPersp.transform(nx * WARP_W, ny * WARP_H);
-      const inner = ringMean(pixels, W, H, ix, iy, 0, adjInnerR);
-      const outer = ringMean(pixels, W, H, ix, iy, adjOuterR1, adjOuterR2);
+      // Find darkest spot in neighborhood — handles curvature-induced position drift
+      let bestCx = ix, bestCy = iy, darkest = 255;
+      for (let dy = -searchStep; dy <= searchStep; dy += searchStep) {
+        for (let dx = -searchStep; dx <= searchStep; dx += searchStep) {
+          const v = ringMean(pixels, W, H, ix + dx, iy + dy, 0, 2);
+          if (v < darkest) { darkest = v; bestCx = ix + dx; bestCy = iy + dy; }
+        }
+      }
+      const inner = ringMean(pixels, W, H, bestCx, bestCy, 0, adjInnerR);
+      const outer = ringMean(pixels, W, H, bestCx, bestCy, adjOuterR1, adjOuterR2);
       ratios.push((outer - inner) / Math.max(outer, 64));
     }
     let best = -Infinity, second = -Infinity, bestIdx = 0;
