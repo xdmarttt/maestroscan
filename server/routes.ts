@@ -4,6 +4,9 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
+// In-memory store for last debug capture
+let lastCapture: { imageBase64: string; studentId: string | null; answers: string[]; timestamp: number } | null = null;
+
 const PYTHON_URL = "http://localhost:5002";
 
 async function proxyToPython(path: string, body: unknown) {
@@ -78,6 +81,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("/api/debug-save-warped error:", err);
       res.json({ ok: false });
     }
+  });
+
+  // Debug: save last scan capture for viewing in browser
+  app.post("/api/debug-capture", async (req, res) => {
+    try {
+      const { imageBase64, studentId, answers } = req.body;
+      if (!imageBase64 || typeof imageBase64 !== "string") {
+        return res.status(400).json({ ok: false });
+      }
+      lastCapture = {
+        imageBase64,
+        studentId: studentId ?? null,
+        answers: answers ?? [],
+        timestamp: Date.now(),
+      };
+      console.log(`[debug-capture] saved (studentId=${studentId ?? "none"}, ${answers?.length ?? 0} answers)`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("/api/debug-capture POST error:", err);
+      res.json({ ok: false });
+    }
+  });
+
+  // Debug: view last captured scan in browser
+  app.get("/api/debug-capture", async (_req, res) => {
+    if (!lastCapture) {
+      return res.send("<html><body style='font-family:sans-serif;padding:40px'><h2>No scan captured yet</h2><p>Scan a sheet from the app and it will appear here.</p></body></html>");
+    }
+    const { imageBase64, studentId, answers, timestamp } = lastCapture;
+    const time = new Date(timestamp).toLocaleString();
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Debug Capture</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0a0f1a; color: #e0e0e0; padding: 20px; margin: 0; }
+  h1 { font-size: 18px; color: #00c6ff; }
+  .meta { font-size: 13px; color: #888; margin-bottom: 16px; }
+  .meta span { color: #ccc; }
+  .answers { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+  .answers span { background: #1a2236; border: 1px solid #2a3a5a; border-radius: 6px; padding: 4px 10px; font-size: 13px; font-family: monospace; }
+  img { max-width: 100%; border-radius: 8px; border: 1px solid #2a3a5a; margin-top: 12px; }
+  .refresh { color: #00c6ff; text-decoration: none; font-size: 13px; }
+</style></head><body>
+  <h1>Last Debug Capture</h1>
+  <div class="meta">
+    <div>Time: <span>${time}</span></div>
+    <div>Student ID: <span>${studentId ?? "none"}</span></div>
+    <div>Answers (${answers.length}): </div>
+  </div>
+  <div class="answers">${answers.map((a: string, i: number) => `<span>Q${i + 1}: ${a}</span>`).join("")}</div>
+  <a class="refresh" href="/api/debug-capture">Refresh</a>
+  <br>
+  <img src="data:image/jpeg;base64,${imageBase64}" />
+</body></html>`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
   });
 
   app.post("/api/scan", async (req, res) => {

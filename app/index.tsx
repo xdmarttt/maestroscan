@@ -24,6 +24,7 @@ import Animated, {
 } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
+import Constants from "expo-constants";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
@@ -59,6 +60,7 @@ async function cropToFrame(
   framePos: { x: number; y: number; width: number; height: number },
   targetWidth: number,
   compress: number,
+  margin = 0.08,
 ): Promise<string | null> {
   const allActions: ImageManipulator.Action[] = [];
   let w = photoW;
@@ -70,7 +72,7 @@ async function cropToFrame(
   const imgPxPerPt = Math.min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT);
   const coverOffX = Math.max(0, (w - SCREEN_WIDTH * imgPxPerPt) / 2);
   const coverOffY = Math.max(0, (h - SCREEN_HEIGHT * imgPxPerPt) / 2);
-  const MARGIN = 0.08;
+  const MARGIN = margin;
   const ix0 = Math.round(Math.max(0, coverOffX + (framePos.x - framePos.width * MARGIN) * imgPxPerPt));
   const iy0 = Math.round(Math.max(0, coverOffY + (framePos.y - framePos.height * MARGIN) * imgPxPerPt));
   const ix1 = Math.round(Math.min(w, coverOffX + (framePos.x + framePos.width * (1 + MARGIN)) * imgPxPerPt));
@@ -171,6 +173,33 @@ export default function ScannerScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsScanning(true);
       setScanDone(true);
+
+      // Fire-and-forget: take HQ photo and upload to debug server
+      const hostUri = Constants.expoConfig?.hostUri ?? Constants.experienceUrl ?? "";
+      const debugHost = hostUri.split(":")[0] || "localhost";
+      const debugUrl = `http://${debugHost}:5001/api/debug-capture`;
+      (async () => {
+        try {
+          const hqPhoto = await cameraRef.current.takePictureAsync({
+            quality: 0.9,
+            base64: false,
+            skipProcessing: false,
+          });
+          const fp = await getFramePos();
+          if (!fp) return;
+          const hqB64 = await cropToFrame(hqPhoto.uri, hqPhoto.width, hqPhoto.height, fp, 1200, 0.9, 0);
+          if (!hqB64) return;
+          console.log(`[debug] uploading HQ image (${(hqB64.length / 1024).toFixed(0)}KB)`);
+          const r = await fetch(debugUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageBase64: hqB64, studentId: barcode, answers: result.answers }),
+          });
+          console.log(`[debug] upload status=${r.status}`);
+        } catch (e) {
+          console.warn(`[debug] upload failed:`, e);
+        }
+      })();
 
       // Brief pause so user sees green feedback before navigation
       await new Promise((r) => setTimeout(r, 200));

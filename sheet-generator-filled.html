@@ -384,19 +384,16 @@ function drawSheet(canvas, opts) {
   ctx.fillText(opts.teacher || '', (tableX + col1W + col2W + lp) * S, (tableY + rowH + 12) * S);
 
   // Divider
-  const divY = 124;
+  const divY = 135;
   ctx.setLineDash([4 * S, 3 * S]); ctx.strokeStyle = '#999'; ctx.lineWidth = 0.8 * S;
   ctx.beginPath(); ctx.moveTo(tableX * S, divY * S); ctx.lineTo((tableX + tableW) * S, divY * S); ctx.stroke();
   ctx.setLineDash([]);
   ctx.fillStyle = '#999'; ctx.font = `italic ${4.5 * S}px Arial`; ctx.textAlign = 'center';
-  ctx.fillText('D E T A C H   H E R E', (SHEET_W / 2) * S, (divY - 2) * S);
   ctx.textAlign = 'left';
 
   // Answer section header
   ctx.fillStyle = '#222'; ctx.font = `bold ${7 * S}px Arial`;
-  ctx.fillText('ANSWER SECTION', tableX * S, 131 * S);
   ctx.fillStyle = '#888'; ctx.font = `${4.5 * S}px Arial`;
-  ctx.fillText('Fill bubble completely · T/F: A = True  B = False', tableX * S, 136.5 * S);
 
   // Bubble grid
   const layout = computeGridLayout(opts.questionCount, opts.choiceCount);
@@ -447,12 +444,6 @@ function drawSheet(canvas, opts) {
   ctx.moveTo(BARCODE_X0 * SHEET_W * S, BARCODE_LABEL_Y * SHEET_H * S);
   ctx.lineTo(BARCODE_X1 * SHEET_W * S, BARCODE_LABEL_Y * SHEET_H * S);
   ctx.stroke();
-
-  // "STUDENT NO." label
-  ctx.fillStyle = '#222';
-  ctx.font = `bold ${5 * S}px Arial`;
-  ctx.textAlign = 'left';
-  ctx.fillText('STUDENT NO.', BARCODE_X0 * SHEET_W * S, (BARCODE_LABEL_Y * SHEET_H - 3) * S);
 
   // Draw barcode if student ID provided
   const studentId = (opts.studentNumber || '').trim();
