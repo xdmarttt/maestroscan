@@ -108,7 +108,7 @@ export default function ScannerScreen() {
   const detectLoopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBarcodeRef = useRef<string | null>(null);
 
-  // Native barcode scanner callback — fires continuously while barcode is visible
+  // Native barcode scanner callback — ref-only, no state updates, no re-renders
   const handleBarcodeScanned = useCallback((result: { data: string; type: string }) => {
     lastBarcodeRef.current = result.data;
   }, []);
@@ -204,6 +204,7 @@ export default function ScannerScreen() {
       setScanDone(false);
       setScanError(null);
       setSheetDetected(false);
+      lastBarcodeRef.current = null;
       framePosRef.current = null; // re-measure on focus (in case layout shifted)
       // Start chain-based detection loop
       detectLoopRef.current = setTimeout(runDetect, 100);
