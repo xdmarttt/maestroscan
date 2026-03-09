@@ -58,6 +58,15 @@ function isNativeAvailable(): boolean {
   return _nativeAvailable;
 }
 
+/** Pre-load native OpenCV module + JIT-compile a tiny Mat to warm up the JSI bridge. */
+export function warmupOpenCV(): void {
+  if (!isNativeAvailable()) return;
+  try {
+    const m = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
+    OpenCV.releaseBuffers([m.id]);
+  } catch {}
+}
+
 function getApiBase(): string {
   const domain = process.env.EXPO_PUBLIC_DOMAIN;
   if (!domain) throw new Error("EXPO_PUBLIC_DOMAIN not set — cannot reach scan server");

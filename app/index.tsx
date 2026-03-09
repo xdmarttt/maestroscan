@@ -30,7 +30,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
-import { detectAndScan, detectSheet, scanSheet, generateDebugImage } from "@/lib/scan-offline";
+import { detectAndScan, detectSheet, scanSheet, generateDebugImage, warmupOpenCV } from "@/lib/scan-offline";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // Edge-to-edge viewfinder — teachers fill the camera with the paper (like ZipGrade)
@@ -152,6 +152,9 @@ export default function ScannerScreen() {
   const [waitingForClear, setWaitingForClear] = useState(false); // UI state for "remove sheet" message
   const waitForClearRef = useRef(false); // ref mirror for detection loop
   const STABLE_THRESHOLD = 1; // fire immediately when all 4 corners lock
+
+  // Pre-load native OpenCV on mount to avoid lag on first detection frame
+  useEffect(() => { warmupOpenCV(); }, []);
 
   // Native barcode scanner callback — ref-only, no state updates, no re-renders
   const handleBarcodeScanned = useCallback((result: { data: string; type: string }) => {
@@ -335,7 +338,7 @@ export default function ScannerScreen() {
       lastBarcodeRef.current = null;
       stableCountRef.current = 0;
       framePosRef.current = null; // re-measure on focus (in case layout shifted)
-      // Start chain-based detection loop
+      // Give camera ~800ms to warm up before first detection (avoids initial lag)
       detectLoopRef.current = setTimeout(runDetect, 100);
       return () => {
         if (detectLoopRef.current) clearTimeout(detectLoopRef.current);
