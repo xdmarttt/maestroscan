@@ -28,6 +28,7 @@ let ContourApproximationModes: any = null;
 let DecompTypes: any = null;
 let InterpolationFlags: any = null;
 let BorderTypes: any = null;
+let LineTypes: any = null;
 
 let _nativeAvailable: boolean | null = null;
 
@@ -48,6 +49,7 @@ function isNativeAvailable(): boolean {
     DecompTypes = mod.DecompTypes;
     InterpolationFlags = mod.InterpolationFlags;
     BorderTypes = mod.BorderTypes;
+    LineTypes = mod.LineTypes;
     _nativeAvailable = true;
   } catch {
     _nativeAvailable = false;
@@ -726,10 +728,10 @@ export function generateDebugImage(
       if (letter === detected) {
         // Detected answer
         const isCorrect = detected === questions[q]?.correct;
-        OpenCV.invoke("circle", colorMat, center, radius, isCorrect ? green : red, -1);
+        OpenCV.invoke("circle", colorMat, center, radius, isCorrect ? green : red, -1, LineTypes.LINE_8);
       } else {
         // Unselected bubble
-        OpenCV.invoke("circle", colorMat, center, radius, gray, 2);
+        OpenCV.invoke("circle", colorMat, center, radius, gray, 2, LineTypes.LINE_8);
       }
       OpenCV.releaseBuffers([center.id]);
     }
@@ -738,7 +740,7 @@ export function generateDebugImage(
   OpenCV.releaseBuffers([green.id, red.id, gray.id]);
 
   // 5. Save to file
-  OpenCV.saveMatToFile(colorMat, outputPath, "jpeg", 80);
+  OpenCV.saveMatToFile(colorMat, outputPath, "jpeg", 0.8);
   OpenCV.releaseBuffers([colorMat.id]);
 }
 

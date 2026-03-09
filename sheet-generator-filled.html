@@ -564,6 +564,8 @@ function randomize() {
 
 // Init
 document.getElementById('sheetDate').value = new Date().toISOString().split('T')[0];
+// Randomize student number on each page load (20108100–20108300)
+document.getElementById('studentNumber').value = String(20108100 + Math.floor(Math.random() * 201));
 generate();
 
 // Auto-regenerate on input change (except randomize triggers)
