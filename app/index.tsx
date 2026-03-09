@@ -30,7 +30,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
-import { detectAndScan, detectSheet, scanSheet } from "@/lib/scan-offline";
+import { detectAndScan, detectSheet, scanSheet, generateDebugImage } from "@/lib/scan-offline";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // Edge-to-edge viewfinder — teachers fill the camera with the paper (like ZipGrade)
@@ -138,6 +138,7 @@ export default function ScannerScreen() {
     percentage: number;
     studentName: string | null;
     studentId: string | null;
+    scannedImage: string;
   } | null>(null);
   const scanResultRef = useRef<boolean>(false);
   const cameraRef = useRef<any>(null);
@@ -264,6 +265,19 @@ export default function ScannerScreen() {
         } catch { /* no roster */ }
       }
 
+      // Generate debug image (tight crop + bubble circles)
+      let scannedImage = b64;
+      if (result.corners) {
+        try {
+          const debugPath = photo.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
+          generateDebugImage(b64, result.corners as [[number,number],[number,number],[number,number],[number,number]], result.answers, questions, choiceCount, debugPath);
+          const debugResult = await ImageManipulator.manipulateAsync(
+            `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
+          );
+          if (debugResult.base64) scannedImage = debugResult.base64;
+        } catch (e) { console.warn('[debug-img] auto:', e); }
+      }
+
       scanResultRef.current = true;
       setScanResult({
         answers: result.answers,
@@ -272,6 +286,7 @@ export default function ScannerScreen() {
         percentage: total > 0 ? Math.round((score / total) * 100) : 0,
         studentName,
         studentId: barcode ?? null,
+        scannedImage,
       });
       setIsScanning(false);
     } catch {
@@ -391,6 +406,19 @@ export default function ScannerScreen() {
         } catch { /* no roster */ }
       }
 
+      // Generate debug image (tight crop + bubble circles)
+      let scannedImage = base64;
+      if (data.corners) {
+        try {
+          const debugPath = photo.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
+          generateDebugImage(base64, data.corners, data.answers, questions, choiceCount, debugPath);
+          const debugResult = await ImageManipulator.manipulateAsync(
+            `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
+          );
+          if (debugResult.base64) scannedImage = debugResult.base64;
+        } catch (e) { console.warn('[debug-img] manual:', e); }
+      }
+
       scanResultRef.current = true;
       setScanResult({
         answers: data.answers,
@@ -399,6 +427,7 @@ export default function ScannerScreen() {
         percentage: total > 0 ? Math.round((score / total) * 100) : 0,
         studentName,
         studentId: barcode ?? null,
+        scannedImage,
       });
     } catch (err: any) {
       console.error("Scan failed:", err);
@@ -433,6 +462,7 @@ export default function ScannerScreen() {
         answers: JSON.stringify(scanResult.answers),
         questions: JSON.stringify(questions),
         studentId: lastBarcodeRef.current ?? "",
+        scannedImage: scanResult.scannedImage,
       },
     });
     scanResultRef.current = false;

@@ -441,7 +441,7 @@ export async function scanSheet(
   base64: string,
   questions: QuizQuestion[],
   choiceCount: 4 | 5 = 4,
-): Promise<{ answers: string[]; confidence: number[] }> {
+): Promise<{ answers: string[]; confidence: number[]; corners: [[number,number],[number,number],[number,number],[number,number]] | null }> {
   if (!isNativeAvailable()) {
     const resp = await fetch(`${getApiBase()}/api/scan`, {
       method: "POST",
@@ -449,7 +449,8 @@ export async function scanSheet(
       body: JSON.stringify({ imageBase64: base64, questions, choiceCount }),
     });
     if (!resp.ok) throw new Error("Server scan failed");
-    return await resp.json();
+    const data = await resp.json();
+    return { ...data, corners: null };
   }
 
   // 1. Load → grayscale
@@ -540,7 +541,7 @@ export async function scanSheet(
     }
   }
 
-  return { answers, confidence };
+  return { answers, confidence, corners: markResult.corners };
 }
 
 /**
@@ -653,6 +654,92 @@ export async function detectAndScan(
   return {
     found: true, answers, confidence, corners, imageSize: [W, H] as [number, number],
   };
+}
+
+/**
+ * Generate a debug image: perspective-warped tight crop with colored circles
+ * drawn at each bubble position showing detected vs correct answers.
+ *
+ * Saves the result as a JPEG file at `outputPath`.
+ * Caller should convert the file to base64 (e.g. via ImageManipulator).
+ */
+export function generateDebugImage(
+  base64: string,
+  corners: [[number, number], [number, number], [number, number], [number, number]],
+  answers: string[],
+  questions: { correct: string }[],
+  choiceCount: 4 | 5,
+  outputPath: string,
+): void {
+  if (!isNativeAvailable()) return;
+
+  // 1. Decode → grayscale
+  const bgrMat = OpenCV.base64ToMat(base64);
+  const grayMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
+  OpenCV.invoke("cvtColor", bgrMat, grayMat, ColorConversionCodes.COLOR_BGR2GRAY);
+  OpenCV.releaseBuffers([bgrMat.id]);
+
+  // 2. Perspective warp to 800×1125
+  const p2f = (x: number, y: number) => OpenCV.createObject(ObjectType.Point2f, x, y);
+  const [tl, tr, bl, br] = corners;
+  const srcPts = OpenCV.createObject(ObjectType.Point2fVector, [
+    p2f(tl[0], tl[1]), p2f(tr[0], tr[1]), p2f(bl[0], bl[1]), p2f(br[0], br[1]),
+  ]);
+  const dstPts = OpenCV.createObject(ObjectType.Point2fVector, [
+    p2f(IDEAL_CORNERS[0][0], IDEAL_CORNERS[0][1]),
+    p2f(IDEAL_CORNERS[1][0], IDEAL_CORNERS[1][1]),
+    p2f(IDEAL_CORNERS[2][0], IDEAL_CORNERS[2][1]),
+    p2f(IDEAL_CORNERS[3][0], IDEAL_CORNERS[3][1]),
+  ]);
+  const M = OpenCV.invoke("getPerspectiveTransform", srcPts, dstPts, DecompTypes.DECOMP_LU);
+  const warpedGray = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
+  const warpSize = OpenCV.createObject(ObjectType.Size, WARP_W, WARP_H);
+  const borderVal = OpenCV.createObject(ObjectType.Scalar, 0);
+  OpenCV.invoke(
+    "warpPerspective", grayMat, warpedGray, M, warpSize,
+    InterpolationFlags.INTER_LINEAR, BorderTypes.BORDER_CONSTANT, borderVal,
+  );
+  OpenCV.releaseBuffers([grayMat.id, srcPts.id, dstPts.id, M.id, warpSize.id, borderVal.id]);
+
+  // 3. Gray → BGR for colored drawing
+  const colorMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC3);
+  OpenCV.invoke("cvtColor", warpedGray, colorMat, ColorConversionCodes.COLOR_GRAY2BGR);
+  OpenCV.releaseBuffers([warpedGray.id]);
+
+  // 4. Draw circles at bubble positions
+  const layout = computeGridLayout(questions.length, choiceCount);
+  const radius = Math.max(6, layout.outerR1);
+
+  const green = OpenCV.createObject(ObjectType.Scalar, 0, 200, 0);
+  const red = OpenCV.createObject(ObjectType.Scalar, 0, 0, 220);
+  const gray = OpenCV.createObject(ObjectType.Scalar, 140, 140, 140);
+
+  for (let q = 0; q < layout.questionCount; q++) {
+    const detected = answers[q] ?? "?";
+    for (let c = 0; c < layout.choiceCount; c++) {
+      const letter = layout.letters[c];
+      const { nx, ny } = layout.bubbleCenter(q, c);
+      const cx = Math.round(nx * WARP_W);
+      const cy = Math.round(ny * WARP_H);
+      const center = OpenCV.createObject(ObjectType.Point, cx, cy);
+
+      if (letter === detected) {
+        // Detected answer
+        const isCorrect = detected === questions[q]?.correct;
+        OpenCV.invoke("circle", colorMat, center, radius, isCorrect ? green : red, -1);
+      } else {
+        // Unselected bubble
+        OpenCV.invoke("circle", colorMat, center, radius, gray, 2);
+      }
+      OpenCV.releaseBuffers([center.id]);
+    }
+  }
+
+  OpenCV.releaseBuffers([green.id, red.id, gray.id]);
+
+  // 5. Save to file
+  OpenCV.saveMatToFile(colorMat, outputPath, "jpeg", 80);
+  OpenCV.releaseBuffers([colorMat.id]);
 }
 
 export { PerspT }; // re-export for results overlay

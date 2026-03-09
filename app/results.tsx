@@ -6,6 +6,9 @@ import {
   ScrollView,
   Pressable,
   Platform,
+  Image,
+  Modal,
+  Dimensions,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -181,7 +184,9 @@ export default function ResultsScreen() {
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
   const studentIdParam = params.studentId as string | undefined;
   const studentId = studentIdParam ?? null;
+  const scannedImage = (params.scannedImage as string) || null;
   const [studentName, setStudentName] = useState("");
+  const [showImage, setShowImage] = useState(false);
 
   // Look up student name from roster by ID
   useEffect(() => {
@@ -271,6 +276,26 @@ export default function ResultsScreen() {
           </View>
         </Animated.View>
 
+        {scannedImage && (
+          <Animated.View entering={FadeInDown.duration(400).delay(220)}>
+            <Pressable
+              onPress={() => setShowImage(true)}
+              style={({ pressed }) => [styles.imagePreviewBtn, pressed && { opacity: 0.8 }]}
+            >
+              <Image
+                source={{ uri: `data:image/jpeg;base64,${scannedImage}` }}
+                style={styles.imageThumb}
+                resizeMode="cover"
+              />
+              <View style={styles.imagePreviewInfo}>
+                <Text style={styles.imagePreviewLabel}>Scanned Image</Text>
+                <Text style={styles.imagePreviewHint}>Tap to view full size</Text>
+              </View>
+              <Ionicons name="expand-outline" size={18} color={Colors.textMuted} />
+            </Pressable>
+          </Animated.View>
+        )}
+
         <Animated.View entering={FadeInDown.duration(300).delay(250)} style={styles.sectionLabel}>
           <Text style={styles.sectionLabelText}>Question Breakdown</Text>
         </Animated.View>
@@ -292,9 +317,27 @@ export default function ResultsScreen() {
           </Pressable>
         </Animated.View>
       </ScrollView>
+      {scannedImage && (
+        <Modal visible={showImage} transparent animationType="fade" onRequestClose={() => setShowImage(false)}>
+          <Pressable style={styles.imageModalBackdrop} onPress={() => setShowImage(false)}>
+            <View style={styles.imageModalHeader}>
+              <Pressable onPress={() => setShowImage(false)} style={styles.imageModalClose}>
+                <Ionicons name="close" size={22} color={Colors.textPrimary} />
+              </Pressable>
+            </View>
+            <Image
+              source={{ uri: `data:image/jpeg;base64,${scannedImage}` }}
+              style={styles.imageModalFull}
+              resizeMode="contain"
+            />
+          </Pressable>
+        </Modal>
+      )}
     </View>
   );
 }
+
+const SCREEN_WIDTH = Dimensions.get("window").width;
 
 const styles = StyleSheet.create({
   container: {
@@ -592,5 +635,60 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Inter_700Bold",
     color: Colors.background,
+  },
+  imagePreviewBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    padding: 12,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  imageThumb: {
+    width: 56,
+    height: 72,
+    borderRadius: 8,
+    backgroundColor: Colors.surfaceElevated,
+  },
+  imagePreviewInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  imagePreviewLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.textPrimary,
+  },
+  imagePreviewHint: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: Colors.textMuted,
+  },
+  imageModalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.95)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  imageModalHeader: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    zIndex: 10,
+  },
+  imageModalClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.surfaceElevated,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  imageModalFull: {
+    width: SCREEN_WIDTH - 32,
+    height: (SCREEN_WIDTH - 32) * 1.4,
+    borderRadius: 12,
   },
 });
