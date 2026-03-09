@@ -44,7 +44,29 @@ export interface GridLayout {
 const AREA_X0 = 0.10;
 const AREA_X1 = 0.90;
 const AREA_Y0 = 0.33;
-const AREA_Y1 = 0.88;
+const AREA_Y1 = 0.82; // reduced from 0.88 to make room for student ID section at bottom
+
+// ── Student ID bubble grid layout ──────────────────────────────────────────
+// 2-digit student number (00–99), placed at the bottom of the sheet.
+// Each row has 10 bubbles (digits 0–9). Students fill one per row.
+const ID_X0 = 0.20;
+const ID_X1 = 0.88;
+const ID_TENS_Y = 0.875;
+const ID_ONES_Y = 0.905;
+export const ID_DIGIT_COUNT = 10;
+export const ID_BUBBLE_DIAM_NORM = 0.018;
+// Sampling radii in warped (800×1125) space
+export const ID_INNER_R = 4;
+export const ID_OUTER_R1 = 9;
+export const ID_OUTER_R2 = 13;
+
+export function idBubbleCenter(row: 0 | 1, digit: number): { nx: number; ny: number } {
+  const spacing = (ID_X1 - ID_X0) / ID_DIGIT_COUNT;
+  return {
+    nx: ID_X0 + (digit + 0.5) * spacing,
+    ny: row === 0 ? ID_TENS_Y : ID_ONES_Y,
+  };
+}
 
 const COL_GAP_NORM = 0.02;
 const LABEL_WIDTH_NORM = 0.04;

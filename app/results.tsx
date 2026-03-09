@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ import * as Haptics from "expo-haptics";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { computeGridLayout, WARP_W, WARP_H } from "@/lib/grid-layout";
+import { loadRoster } from "@/lib/quiz-storage";
 // @ts-ignore — no type definitions
 import PerspT from "perspective-transform";
 
@@ -183,8 +184,22 @@ export default function ResultsScreen() {
   const answers: string[] = JSON.parse((params.answers as string) || "[]");
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
   const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
-  const studentName = (params.studentName as string) || "";
+  const studentIdParam = params.studentId as string | undefined;
+  const studentId = studentIdParam !== undefined ? parseInt(studentIdParam, 10) : null;
+  const [studentName, setStudentName] = useState("");
   const debugImage = params.debugImage as string | undefined;
+
+  // Look up student name from roster by ID
+  useEffect(() => {
+    if (studentId === null || isNaN(studentId)) return;
+    loadRoster().then((r) => {
+      if (studentId >= 1 && studentId <= r.students.length) {
+        setStudentName(r.students[studentId - 1]); // 1-based ID
+      } else {
+        setStudentName(`Student #${studentId}`);
+      }
+    });
+  }, [studentId]);
   const corners: [number, number][] = JSON.parse((params.corners as string) || "[]");
   const imageSize: [number, number] = JSON.parse((params.imageSize as string) || "[0,0]");
   const layout = computeGridLayout(questions.length, choiceCount);
@@ -260,7 +275,7 @@ export default function ResultsScreen() {
       >
         {debugImage && (
           <Animated.View entering={FadeInDown.duration(400)} style={styles.debugImageWrap}>
-            <Text style={styles.debugImageLabel}>DEBUG: Captured Image</Text>
+            <Text style={styles.debugImageLabel}>Scanned Sheet</Text>
             <View style={[styles.debugImageContainer, hasCorners && { aspectRatio: imageSize[0] / imageSize[1] }]}>
               <Image
                 source={{ uri: `data:image/jpeg;base64,${debugImage}` }}
@@ -685,12 +700,12 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
     borderWidth: 1,
-    borderColor: Colors.warning,
+    borderColor: Colors.border,
   },
   debugImageLabel: {
     fontSize: 11,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.warning,
+    color: Colors.textSecondary,
     textTransform: "uppercase",
     letterSpacing: 1,
   },

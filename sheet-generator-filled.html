@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GradeSnap — Filled Sheet Generator</title>
-<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Inter', -apple-system, system-ui, sans-serif; background: #f0f0f0; }
@@ -140,8 +139,8 @@
       <input type="text" id="studentName" value="Juan Dela Cruz" placeholder="Student name">
     </div>
     <div class="form-group">
-      <label>Student ID / LRN</label>
-      <input type="text" id="studentId" value="123456789012" placeholder="e.g. 123456789012">
+      <label>Student Number (0–99, for bubble grid)</label>
+      <input type="number" id="studentNumber" value="7" min="0" max="99" placeholder="e.g. 7">
     </div>
 
     <hr class="sep">
@@ -167,7 +166,7 @@
 const SHEET_W = 320, SHEET_H = 450;
 const WARP_W = 800, WARP_H = 1125;
 const AREA_X0 = 0.10, AREA_X1 = 0.90;
-const AREA_Y0 = 0.33, AREA_Y1 = 0.88;
+const AREA_Y0 = 0.33, AREA_Y1 = 0.82;
 const COL_GAP_NORM = 0.02;
 const LABEL_WIDTH_NORM = 0.04;
 
@@ -218,17 +217,18 @@ const MARKS = [
   { x: SHEET_W - 9.6 - MARK_SIZE, y: SHEET_H - 18 - MARK_SIZE },
 ];
 
-function drawQR(ctx, text, x, y, size) {
-  const qr = qrcode(0, 'L');
-  qr.addData(text);
-  qr.make();
-  const mc = qr.getModuleCount();
-  const cs = size / mc;
-  ctx.fillStyle = '#000';
-  for (let r = 0; r < mc; r++)
-    for (let c = 0; c < mc; c++)
-      if (qr.isDark(r, c))
-        ctx.fillRect(x + c * cs, y + r * cs, cs + 0.5, cs + 0.5);
+// ── Student ID bubble grid constants (MUST match grid-layout.ts) ────────────
+const ID_X0 = 0.20, ID_X1 = 0.88;
+const ID_TENS_Y = 0.875, ID_ONES_Y = 0.905;
+const ID_DIGIT_COUNT = 10;
+const ID_BUBBLE_DIAM_NORM = 0.018;
+
+function idBubbleCenter(row, digit) {
+  const spacing = (ID_X1 - ID_X0) / ID_DIGIT_COUNT;
+  return {
+    nx: ID_X0 + (digit + 0.5) * spacing,
+    ny: row === 0 ? ID_TENS_Y : ID_ONES_Y,
+  };
 }
 
 function formatDate(dateStr) {
@@ -309,23 +309,6 @@ function drawSheet(canvas, opts) {
   ctx.font = `${5.5 * S}px Arial`;
   ctx.fillText([opts.quizTitle, opts.totalPoints ? opts.totalPoints + ' pts' : '', opts.dateStr].filter(Boolean).join(' · '), (barX + 8) * S, (barY + 37) * S);
 
-  // QR code — top-right, outside header bar
-  const qrSize = 50, qrPad = 3;
-  const qrX = SHEET_W - 34 - qrSize - qrPad * 2;
-  const qrY2 = 50;
-  const qrPayload = `GS:${opts.quizId || 'quiz'}:${opts.studentName || 'student'}`;
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(qrX * S, qrY2 * S, (qrSize + qrPad * 2) * S, (qrSize + qrPad * 2) * S);
-  ctx.strokeStyle = '#000'; ctx.lineWidth = 1 * S;
-  ctx.strokeRect(qrX * S, qrY2 * S, (qrSize + qrPad * 2) * S, (qrSize + qrPad * 2) * S);
-  drawQR(ctx, qrPayload, (qrX + qrPad) * S, (qrY2 + qrPad) * S, qrSize * S);
-
-  ctx.fillStyle = '#666';
-  ctx.font = `bold ${4 * S}px Arial`;
-  ctx.textAlign = 'center';
-  ctx.fillText('SCAN TO GRADE', (qrX + qrSize / 2 + qrPad) * S, (qrY2 + qrSize + qrPad * 2 + 6) * S);
-  ctx.textAlign = 'left';
-
   // Student info table
   const tableY = 98, tableH = 28, tableX = barX, tableW = barW;
   const col1W = tableW * 0.52, col2W = tableW * 0.24;
@@ -340,7 +323,7 @@ function drawSheet(canvas, opts) {
   const lp = 3;
   ctx.fillStyle = '#000'; ctx.font = `bold ${4.5 * S}px Arial`;
   ctx.fillText('NAME', (tableX + lp) * S, (tableY + 5) * S);
-  ctx.fillText('LRN', (tableX + col1W + lp) * S, (tableY + 5) * S);
+  ctx.fillText('NO.', (tableX + col1W + lp) * S, (tableY + 5) * S);
   ctx.fillText('DATE', (tableX + col1W + col2W + lp) * S, (tableY + 5) * S);
   ctx.fillText('SECTION', (tableX + lp) * S, (tableY + rowH + 5) * S);
   ctx.fillText('SCORE', (tableX + col1W + lp) * S, (tableY + rowH + 5) * S);
@@ -348,7 +331,7 @@ function drawSheet(canvas, opts) {
 
   ctx.fillStyle = '#222'; ctx.font = `${6 * S}px Arial`;
   ctx.fillText(opts.studentName || '', (tableX + lp) * S, (tableY + 12) * S);
-  ctx.fillText(opts.studentId || '', (tableX + col1W + lp) * S, (tableY + 12) * S);
+  ctx.fillText(opts.studentNumber || '', (tableX + col1W + lp) * S, (tableY + 12) * S);
   ctx.fillText(opts.dateStr || '', (tableX + col1W + col2W + lp) * S, (tableY + 12) * S);
   ctx.fillText(opts.section || '', (tableX + lp) * S, (tableY + rowH + 12) * S);
   ctx.fillStyle = '#555';
@@ -412,6 +395,69 @@ function drawSheet(canvas, opts) {
     }
   }
 
+  // ── Student ID bubble grid ──
+  const idBubbleR = (ID_BUBBLE_DIAM_NORM * SHEET_W / 2) * S;
+  const idLabelY = (ID_TENS_Y * SHEET_H - 8) * S;
+
+  // Section divider
+  ctx.strokeStyle = '#999';
+  ctx.lineWidth = 0.5 * S;
+  ctx.beginPath();
+  ctx.moveTo(ID_X0 * SHEET_W * S, (ID_TENS_Y * SHEET_H - 12) * S);
+  ctx.lineTo(ID_X1 * SHEET_W * S, (ID_TENS_Y * SHEET_H - 12) * S);
+  ctx.stroke();
+
+  // "STUDENT NO." label
+  ctx.fillStyle = '#222';
+  ctx.font = `bold ${5 * S}px Arial`;
+  ctx.textAlign = 'left';
+  ctx.fillText('STUDENT NO.', ID_X0 * SHEET_W * S, idLabelY);
+
+  // Digit headers (0-9)
+  ctx.fillStyle = '#444';
+  ctx.font = `bold ${4.5 * S}px Arial`;
+  ctx.textAlign = 'center';
+  for (let d = 0; d < ID_DIGIT_COUNT; d++) {
+    const { nx } = idBubbleCenter(0, d);
+    ctx.fillText(String(d), nx * SHEET_W * S, idLabelY);
+  }
+
+  // Row labels and bubbles
+  const idRowLabels = ['T', 'O'];
+  const studentNum = parseInt(opts.studentNumber);
+  const idTens = !isNaN(studentNum) ? Math.floor(studentNum / 10) % 10 : -1;
+  const idOnes = !isNaN(studentNum) ? studentNum % 10 : -1;
+
+  for (let row = 0; row < 2; row++) {
+    const { ny } = idBubbleCenter(row, 0);
+    const cy = ny * SHEET_H * S;
+
+    // Row label
+    ctx.fillStyle = '#666';
+    ctx.font = `bold ${4.5 * S}px Arial`;
+    ctx.textAlign = 'right';
+    ctx.fillText(idRowLabels[row], (ID_X0 * SHEET_W - 4) * S, cy + 1.5 * S);
+
+    // Bubbles
+    const filledDigit = row === 0 ? idTens : idOnes;
+    for (let d = 0; d < ID_DIGIT_COUNT; d++) {
+      const { nx, ny: by } = idBubbleCenter(row, d);
+      const cx = nx * SHEET_W * S;
+      const bcy = by * SHEET_H * S;
+
+      ctx.beginPath();
+      ctx.arc(cx, bcy, idBubbleR, 0, Math.PI * 2);
+      if (d === filledDigit) {
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 1.2 * S;
+        ctx.stroke();
+      }
+    }
+  }
+
   // Footer
   ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5 * S;
   ctx.beginPath(); ctx.moveTo(tableX * S, (SHEET_H - 22) * S); ctx.lineTo((tableX + tableW) * S, (SHEET_H - 22) * S); ctx.stroke();
@@ -456,7 +502,6 @@ function generate() {
   const choiceCount = parseInt(document.querySelector('input[name="choiceCount"]:checked').value);
   const wrongCount = Math.min(questionCount, Math.max(0, parseInt(document.getElementById('wrongCount').value) || 0));
   const dateVal = document.getElementById('sheetDate').value;
-  const quizId = 'q' + Date.now().toString(36).slice(-6);
 
   // Generate or reuse answers
   if (!lastAnswerData || lastAnswerData.questionCount !== questionCount ||
@@ -475,10 +520,9 @@ function generate() {
     choiceCount,
     totalPoints: document.getElementById('totalPoints').value,
     studentName: document.getElementById('studentName').value,
-    studentId: document.getElementById('studentId').value,
+    studentNumber: document.getElementById('studentNumber').value,
     section: document.getElementById('gradeSection').value,
     dateStr: formatDate(dateVal),
-    quizId,
     filledAnswers: lastAnswerData.student,
   });
 

@@ -10,10 +10,9 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import QRCode from "react-qr-code";
 import Colors from "@/constants/colors";
 import { QuizQuestion, DEFAULT_QUIZ } from "@/lib/quiz-storage";
-import { computeGridLayout, SHEET_W, SHEET_H } from "@/lib/grid-layout";
+import { computeGridLayout, SHEET_W, SHEET_H, idBubbleCenter, ID_DIGIT_COUNT, ID_BUBBLE_DIAM_NORM } from "@/lib/grid-layout";
 
 // Registration mark: 20×20 black square, 9.6px from each edge
 const MARK_SIZE = 20;
@@ -24,7 +23,7 @@ const MID_BAR_H = 8;
 
 export default function SheetScreen() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ questions?: string; choiceCount?: string; studentName?: string; quizId?: string }>();
+  const params = useLocalSearchParams<{ questions?: string; choiceCount?: string }>();
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
@@ -36,10 +35,11 @@ export default function SheetScreen() {
   }
 
   const choiceCount = (params.choiceCount === "5" ? 5 : 4) as 4 | 5;
-  const studentName = params.studentName || "";
-  const quizId = params.quizId || "";
-  const qrPayload = studentName && quizId ? `GS:${quizId}:${studentName}` : "";
   const layout = computeGridLayout(questions.length, choiceCount);
+
+  // Student ID bubble dimensions
+  const idBubbleD = ID_BUBBLE_DIAM_NORM * SHEET_W;
+  const idBubbleR = idBubbleD / 2;
 
   const bubbleD = layout.bubbleDiameterSheet;
   const bubbleR = bubbleD / 2;
@@ -92,16 +92,9 @@ export default function SheetScreen() {
             </Text>
           </View>
 
-          {/* QR code — top-right, outside header bar */}
-          {qrPayload ? (
-            <View style={styles.qrContainer}>
-              <QRCode value={qrPayload} size={50} level="L" />
-            </View>
-          ) : null}
-
           {/* Student name line */}
           <Text style={styles.studentName}>
-            Name: {studentName || "___________________________"}
+            Name: ___________________________
           </Text>
 
           {/* Divider */}
@@ -166,6 +159,59 @@ export default function SheetScreen() {
                         width: bubbleD,
                         height: bubbleD,
                         borderRadius: bubbleR,
+                      },
+                    ]}
+                  />
+                );
+              })}
+            </React.Fragment>
+          ))}
+
+          {/* Student ID bubble grid — bottom of sheet */}
+          <View style={styles.idDivider} />
+          <Text style={styles.idSectionLabel}>STUDENT NO.</Text>
+          {/* Digit column headers: 0–9 */}
+          {Array.from({ length: ID_DIGIT_COUNT }).map((_, d) => {
+            const { nx } = idBubbleCenter(0, d);
+            return (
+              <Text
+                key={`id-hdr-${d}`}
+                style={[
+                  styles.idDigitHeader,
+                  { left: nx * SHEET_W - 4, top: 0.855 * SHEET_H },
+                ]}
+              >
+                {d}
+              </Text>
+            );
+          })}
+          {/* Row labels + bubbles */}
+          {([0, 1] as const).map((row) => (
+            <React.Fragment key={`id-row-${row}`}>
+              <Text
+                style={[
+                  styles.idRowLabel,
+                  {
+                    left: 0.08 * SHEET_W,
+                    top: idBubbleCenter(row, 0).ny * SHEET_H - idBubbleR - 1,
+                  },
+                ]}
+              >
+                {row === 0 ? "T" : "O"}
+              </Text>
+              {Array.from({ length: ID_DIGIT_COUNT }).map((_, d) => {
+                const { nx, ny } = idBubbleCenter(row, d);
+                return (
+                  <View
+                    key={`id-${row}-${d}`}
+                    style={[
+                      styles.idBubble,
+                      {
+                        left: nx * SHEET_W - idBubbleR,
+                        top: ny * SHEET_H - idBubbleR,
+                        width: idBubbleD,
+                        height: idBubbleD,
+                        borderRadius: idBubbleR,
                       },
                     ]}
                   />
@@ -269,7 +315,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 50,
     left: 32,
-    right: 96,
+    right: 32,
     height: 38,
     backgroundColor: "#fff",
     borderWidth: 1.5,
@@ -296,16 +342,6 @@ const styles = StyleSheet.create({
     fontSize: 6,
     color: "#555",
     marginTop: 1,
-  },
-  qrContainer: {
-    position: "absolute",
-    top: 50,
-    right: 34,
-    backgroundColor: "#fff",
-    padding: 3,
-    borderWidth: 1,
-    borderColor: "#000",
-    borderRadius: 2,
   },
   studentName: {
     position: "absolute",
@@ -348,6 +384,45 @@ const styles = StyleSheet.create({
   bubble: {
     position: "absolute",
     borderWidth: 1.5,
+    borderColor: "#000000",
+    backgroundColor: "#FFFFFF",
+  },
+  idDivider: {
+    position: "absolute",
+    top: 0.84 * SHEET_H,
+    left: 32,
+    right: 32,
+    height: 1,
+    backgroundColor: "#ccc",
+  },
+  idSectionLabel: {
+    position: "absolute",
+    top: 0.845 * SHEET_H,
+    left: 36,
+    fontSize: 6,
+    fontWeight: "700",
+    color: "#222",
+    letterSpacing: 0.5,
+  },
+  idDigitHeader: {
+    position: "absolute",
+    width: 8,
+    textAlign: "center",
+    fontSize: 5.5,
+    fontWeight: "700",
+    color: "#000",
+  },
+  idRowLabel: {
+    position: "absolute",
+    fontSize: 5,
+    fontWeight: "600",
+    color: "#666",
+    textAlign: "center",
+    width: 8,
+  },
+  idBubble: {
+    position: "absolute",
+    borderWidth: 1.2,
     borderColor: "#000000",
     backgroundColor: "#FFFFFF",
   },

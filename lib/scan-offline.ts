@@ -11,9 +11,8 @@
  */
 
 import PerspT from "perspective-transform";
-import jsQR from "jsqr";
 import type { QuizQuestion } from "./quiz-storage";
-import { computeGridLayout, WARP_W as GRID_WARP_W, WARP_H as GRID_WARP_H } from "./grid-layout";
+import { computeGridLayout, WARP_W as GRID_WARP_W, WARP_H as GRID_WARP_H, idBubbleCenter, ID_DIGIT_COUNT, ID_INNER_R, ID_OUTER_R1, ID_OUTER_R2 } from "./grid-layout";
 
 // Lazy-load native OpenCV — fails gracefully in Expo Go
 let OpenCV: any = null;
@@ -167,8 +166,8 @@ function collectCandidatesFromBinary(
     if (bw < 2 || bh < 2) continue;
     // Relaxed: perspective makes squares trapezoidal
     if (Math.min(bw, bh) / Math.max(bw, bh) < 0.5) continue;
-    // Solidity: marks are solid squares (~1.0), reject irregular shapes
-    if (area / (bw * bh) < 0.75) continue;
+    // Relaxed: printing artifacts + perspective lower solidity
+    if (area / (bw * bh) < 0.65) continue;
 
     const cx = x + bw / 2;
     const cy = y + bh / 2;
@@ -222,7 +221,7 @@ function findMarkCandidates(
     "threshold",
     blurred,
     fixedBin,
-    50,
+    80,
     255,
     ThresholdTypes.THRESH_BINARY_INV
   );
@@ -293,7 +292,6 @@ function findFourMarks(
   ];
 
   const corners: [number, number][] = [];
-  const cornerDarkness: number[] = [];
   for (const { nx0, nx1, ny0, ny1 } of quads) {
     const inQ = candidates.filter(
       (c) => c.cx >= nx0 * W && c.cx < nx1 * W && c.cy >= ny0 * H && c.cy < ny1 * H
@@ -311,13 +309,6 @@ function findFourMarks(
       }
     }
     corners.push([best.cx, best.cy]);
-    cornerDarkness.push(bestDark);
-  }
-
-  // All 4 corners must be genuinely dark — printed black marks should be < 90.
-  // This prevents false positives from random dark objects in non-sheet scenes.
-  for (const d of cornerDarkness) {
-    if (d > 90) return null;
   }
 
   const [tl, tr, bl, br] = corners as [
@@ -330,144 +321,63 @@ function findFourMarks(
   // Geometric validation
   const rectW = (tr[0] - tl[0] + br[0] - bl[0]) / 2;
   const rectH = (bl[1] - tl[1] + br[1] - tr[1]) / 2;
-  // Detected sheet must fill at least 25% of the image
-  if (rectW < W * 0.25 || rectH < H * 0.25) return null;
+  if (rectW < W * 0.10 || rectH < H * 0.10) return null;
 
-  // Sheet aspect ratio is 320:450 ≈ 0.71 — allow 0.4 to 1.5 for perspective
   const aspect = rectH / (rectW + 1e-6);
-  if (aspect < 0.4 || aspect > 1.5) return null;
+  if (aspect < 0.5 || aspect > 4.0) return null;
 
   if (tl[0] >= tr[0] || bl[0] >= br[0] || tl[1] >= bl[1] || tr[1] >= br[1]) return null;
 
   return [tl, tr, bl, br];
 }
 
-// ── QR code decoding ─────────────────────────────────────────────────────────
-
-// QR scan region in normalized sheet coordinates (top-right area)
-// 50px QR at top-right (right:34, top:50) — QR-first: must decode to allow scan
-const QR_NX0 = 0.62;
-const QR_NX1 = 0.96;
-const QR_NY0 = 0.06;
-const QR_NY1 = 0.28;
+// ── Student ID bubble reading ────────────────────────────────────────────────
 
 /**
- * Decode a QR code from the top-right region of the detected sheet.
- * Uses PerspT inverse mapping to produce a RECTIFIED (perspective-corrected)
- * image of the QR region — same technique as bubble sampling.
- * Returns parsed { quizId, studentName } or null.
+ * Read 2-digit student ID from bubble grid using PerspT inverse mapping.
+ * Maps bubble positions from warped sheet coords → original image coords,
+ * then samples ring-mean on original pixels.
+ * Returns student number (0–99) or null if unreadable.
  */
-function decodeSheetQR(
+function readStudentID(
   pixels: Uint8Array,
   W: number,
   H: number,
-  corners: [[number, number], [number, number], [number, number], [number, number]],
-): { quizId: string; studentName: string } | null {
-  try {
-    const idealFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
-    const detectedFlat = corners.flatMap(([x, y]) => [x, y]);
-    const invPersp = PerspT(idealFlat, detectedFlat);
+  invPersp: ReturnType<typeof PerspT>,
+  adjIdInnerR: number,
+  adjIdOuterR1: number,
+  adjIdOuterR2: number,
+): number | null {
+  const digits: number[] = [];
 
-    // Full resolution rectified QR region (~57K perspective transforms, still fast)
-    const outW = Math.round((QR_NX1 - QR_NX0) * WARP_W);
-    const outH = Math.round((QR_NY1 - QR_NY0) * WARP_H);
-    if (outW < 10 || outH < 10) return null;
-
-    // Sample rectified QR region: for each output pixel, map through
-    // inverse perspective to get the original image coordinate
-    const gray = new Uint8Array(outW * outH);
-    const wxBase = QR_NX0 * WARP_W;
-    const wyBase = QR_NY0 * WARP_H;
-
-    // Bilinear interpolation for smoother QR sampling (reduces aliasing)
-    for (let y = 0; y < outH; y++) {
-      for (let x = 0; x < outW; x++) {
-        const [ix, iy] = invPersp.transform(wxBase + x, wyBase + y);
-        const x0 = Math.floor(ix), y0 = Math.floor(iy);
-        const x1 = x0 + 1, y1 = y0 + 1;
-        if (x0 < 0 || x1 >= W || y0 < 0 || y1 >= H) {
-          gray[y * outW + x] = 255;
-          continue;
-        }
-        const fx = ix - x0, fy = iy - y0;
-        const p00 = pixels[y0 * W + x0];
-        const p10 = pixels[y0 * W + x1];
-        const p01 = pixels[y1 * W + x0];
-        const p11 = pixels[y1 * W + x1];
-        gray[y * outW + x] = Math.round(
-          p00 * (1 - fx) * (1 - fy) + p10 * fx * (1 - fy) +
-          p01 * (1 - fx) * fy + p11 * fx * fy
-        );
-      }
+  for (let row = 0; row < 2; row++) {
+    const ratios: number[] = [];
+    for (let d = 0; d < ID_DIGIT_COUNT; d++) {
+      const { nx, ny } = idBubbleCenter(row as 0 | 1, d);
+      const [ix, iy] = invPersp.transform(nx * WARP_W, ny * WARP_H);
+      const inner = ringMean(pixels, W, H, ix, iy, 0, adjIdInnerR);
+      const outer = ringMean(pixels, W, H, ix, iy, adjIdOuterR1, adjIdOuterR2);
+      ratios.push((outer - inner) / Math.max(outer, 64));
     }
 
-    // Normalize contrast: stretch min/max to 0-255
-    let gMin = 255, gMax = 0;
-    for (let i = 0; i < gray.length; i++) {
-      if (gray[i] < gMin) gMin = gray[i];
-      if (gray[i] > gMax) gMax = gray[i];
+    // Find best and second-best
+    let best = -Infinity, second = -Infinity, bestIdx = 0;
+    for (let i = 0; i < ratios.length; i++) {
+      if (ratios[i] > best) { second = best; best = ratios[i]; bestIdx = i; }
+      else if (ratios[i] > second) { second = ratios[i]; }
     }
-    const gRange = gMax - gMin || 1;
-    for (let i = 0; i < gray.length; i++) {
-      gray[i] = Math.round(((gray[i] - gMin) / gRange) * 255);
+    const gap = best - second;
+
+    if (best >= 0.13 && gap >= 0.06) {
+      digits.push(bestIdx);
+    } else {
+      return null; // can't determine this digit
     }
-
-    // Helper: gray → RGBA with white padding (quiet zone for jsQR finder patterns)
-    const PAD = 16;
-    const padW = outW + PAD * 2, padH = outH + PAD * 2;
-    const toRGBA = (src: Uint8Array) => {
-      const out = new Uint8ClampedArray(padW * padH * 4);
-      out.fill(255); // white background (quiet zone)
-      for (let y = 0; y < outH; y++) {
-        for (let x = 0; x < outW; x++) {
-          const v = src[y * outW + x];
-          const j = ((y + PAD) * padW + (x + PAD)) * 4;
-          out[j] = v; out[j + 1] = v; out[j + 2] = v; out[j + 3] = 255;
-        }
-      }
-      return out;
-    };
-
-    // Try 1: normalized grayscale
-    let result = jsQR(toRGBA(gray), padW, padH);
-
-    // Try 2: Otsu binarization (sharp B&W) — helps when camera produces soft edges
-    if (!result) {
-      // Compute Otsu threshold
-      const hist = new Int32Array(256);
-      for (let i = 0; i < gray.length; i++) hist[gray[i]]++;
-      const total = gray.length;
-      let sumAll = 0;
-      for (let i = 0; i < 256; i++) sumAll += i * hist[i];
-      let sumB = 0, wB = 0, maxVar = 0, threshold = 128;
-      for (let t = 0; t < 256; t++) {
-        wB += hist[t];
-        if (wB === 0) continue;
-        const wF = total - wB;
-        if (wF === 0) break;
-        sumB += t * hist[t];
-        const mB = sumB / wB, mF = (sumAll - sumB) / wF;
-        const v = wB * wF * (mB - mF) * (mB - mF);
-        if (v > maxVar) { maxVar = v; threshold = t; }
-      }
-      const bin = new Uint8Array(gray.length);
-      for (let i = 0; i < gray.length; i++) bin[i] = gray[i] > threshold ? 255 : 0;
-      result = jsQR(toRGBA(bin), padW, padH);
-    }
-    console.log(`[QR] rectified=${outW}x${outH} decoded=${result?.data ?? 'null'}`);
-    if (!result?.data) return null;
-
-    // Parse GS:<quizId>:<studentName>
-    const parts = result.data.split(":");
-    if (parts.length >= 3 && parts[0] === "GS") {
-      console.log(`[QR] student=${parts.slice(2).join(":")}`);
-      return { quizId: parts[1], studentName: parts.slice(2).join(":") };
-    }
-    return null;
-  } catch (e) {
-    console.warn('[QR] decode error:', e);
-    return null;
   }
+
+  const id = digits[0] * 10 + digits[1];
+  console.log(`[ID] student=${id} (tens=${digits[0]} ones=${digits[1]})`);
+  return id;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -630,7 +540,7 @@ export async function detectAndScan(
   base64: string,
   questions: QuizQuestion[],
   choiceCount: 4 | 5 = 4,
-): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number]; studentName?: string; quizId?: string }> {
+): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number]; studentId?: number }> {
   if (!isNativeAvailable()) {
     // Server fallback: detect first, then scan if found
     try {
@@ -656,7 +566,7 @@ export async function detectAndScan(
     }
   }
 
-  // Single OpenCV session: decode → gray → detect → sample
+  // Single OpenCV session: decode → gray → detect → sample via PerspT
   const bgrMat = OpenCV.base64ToMat(base64);
   const grayMat = OpenCV.createObject(ObjectType.Mat, 1, 1, DataTypes.CV_8UC1);
   OpenCV.invoke("cvtColor", bgrMat, grayMat, ColorConversionCodes.COLOR_BGR2GRAY);
@@ -684,13 +594,8 @@ export async function detectAndScan(
     pixels[i] = Math.round(((rawPixels[i] - pMin) / pRange) * 255);
   }
 
-  // Try QR decode — if it works, sheet is confirmed real
-  const qrResult = decodeSheetQR(pixels, W, H, corners);
-
-  // Use PerspT to map bubble positions from warped space → original image space.
+  // PerspT: map bubble positions from warped sheet coords → original image coords
   const layout = computeGridLayout(questions.length, choiceCount);
-
-  // Inverse perspective: warped sheet coords → original image coords
   const idealFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
   const detectedFlat = corners.flatMap(([x, y]) => [x, y]);
   const invPersp = PerspT(idealFlat, detectedFlat);
@@ -705,22 +610,13 @@ export async function detectAndScan(
   const adjOuterR1 = Math.max(adjInnerR + 1, Math.round(layout.outerR1 * radiusScale));
   const adjOuterR2 = Math.max(adjOuterR1 + 1, Math.round(layout.outerR2 * radiusScale));
 
-  // If no QR, validate midpoint bars to prevent hallucinations
-  if (!qrResult) {
-    const MID_Y_WARPED = (225 / 450) * WARP_H;
-    const midpoints: [number, number][] = [
-      [IDEAL_CORNERS[0][0], MID_Y_WARPED],
-      [IDEAL_CORNERS[1][0], MID_Y_WARPED],
-    ];
-    const midR = Math.max(3, Math.round(4 * radiusScale));
-    for (const [mx, my] of midpoints) {
-      const [ix, iy] = invPersp.transform(mx, my);
-      if (ringMean(pixels, W, H, ix, iy, 0, midR) > 200) {
-        return { found: false };
-      }
-    }
-  }
+  // Read student ID from bubble grid via PerspT
+  const adjIdInnerR = Math.max(2, Math.round(ID_INNER_R * radiusScale));
+  const adjIdOuterR1 = Math.max(adjIdInnerR + 1, Math.round(ID_OUTER_R1 * radiusScale));
+  const adjIdOuterR2 = Math.max(adjIdOuterR1 + 1, Math.round(ID_OUTER_R2 * radiusScale));
+  const studentId = readStudentID(pixels, W, H, invPersp, adjIdInnerR, adjIdOuterR1, adjIdOuterR2);
 
+  // Sample answer bubbles via PerspT on original pixels
   const answers: string[] = [];
   const confidence: number[] = [];
   for (let q = 0; q < layout.questionCount; q++) {
@@ -749,32 +645,8 @@ export async function detectAndScan(
 
   return {
     found: true, answers, confidence, corners, imageSize: [W, H] as [number, number],
-    ...(qrResult ? { studentName: qrResult.studentName, quizId: qrResult.quizId } : {}),
+    ...(studentId !== null ? { studentId } : {}),
   };
 }
 
-// ── Fallback: perspective-transform JS library ────────────────────────────────
-// If react-native-fast-opencv's warpPerspective is unavailable, this alternative
-// uses the already-installed `perspective-transform` package to map bubble
-// positions directly from warped space back to original image coords,
-// sampling from the gray pixel buffer without needing a warped Mat.
-//
-// Usage: replace step 4–5 in scanSheet() with this approach:
-//
-// export async function scanSheetFallback(base64, questions) {
-//   const { cols: W, rows: H, buffer: pixels } = ...; // gray pixels from bgrMat
-//   const corners = findFourMarks(...);
-//   // inverse homography: warped space → original image
-//   const srcFlat = [tl[0],tl[1], tr[0],tr[1], bl[0],bl[1], br[0],br[1]];
-//   const dstFlat = IDEAL_CORNERS.flat();
-//   const inv = PerspT(dstFlat, srcFlat); // maps ideal → original
-//   for each bubble at (wx, wy):
-//     const [ix, iy] = inv.transform(wx, wy);
-//     const inner = ringMean(pixels, W, H, ix, iy, INNER_R_ORIG, ...);
-//     ...
-// }
-//
-// Scale factor: original image is ~800px wide; warped is 800×1125.
-// Bubble sampling radii in original space ≈ radii in warped space × 0.9.
-
-export { PerspT }; // re-export so fallback can import from one place
+export { PerspT }; // re-export for results overlay

@@ -7,8 +7,6 @@ import {
   TextInput,
   Pressable,
   Platform,
-  Modal,
-  FlatList,
 } from "react-native";
 import { router } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
@@ -144,7 +142,6 @@ export default function SetupScreen() {
   const [quizId, setQuizId] = useState(DEFAULT_QUIZ.id);
   const [loaded, setLoaded] = useState(false);
   const [students, setStudents] = useState<string[]>([]);
-  const [showPicker, setShowPicker] = useState(false);
 
   const letters = choiceCount === 5 ? LETTERS_5 : LETTERS_4;
   const questionCount = questions.length;
@@ -208,25 +205,15 @@ export default function SetupScreen() {
     router.back();
   };
 
-  const navigateToSheet = async (studentName?: string) => {
+  const navigateToSheet = async () => {
     await saveQuiz(currentConfig());
     router.push({
       pathname: "/sheet",
       params: {
         questions: JSON.stringify(questions),
         choiceCount: String(choiceCount),
-        quizId,
-        ...(studentName ? { studentName } : {}),
       },
     });
-  };
-
-  const handleViewSheet = async () => {
-    if (students.length > 0) {
-      setShowPicker(true);
-    } else {
-      navigateToSheet();
-    }
   };
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
@@ -244,7 +231,7 @@ export default function SetupScreen() {
         </Pressable>
         <Text style={styles.title}>Quiz Setup</Text>
         <Pressable
-          onPress={handleViewSheet}
+          onPress={navigateToSheet}
           style={({ pressed }) => [styles.sheetBtn, pressed && { opacity: 0.6 }]}
         >
           <Ionicons name="document-outline" size={20} color={Colors.accent} />
@@ -353,40 +340,6 @@ export default function SetupScreen() {
         </Pressable>
       </View>
 
-      {/* Student picker modal */}
-      <Modal visible={showPicker} transparent animationType="slide">
-        <Pressable style={styles.modalOverlay} onPress={() => setShowPicker(false)}>
-          <Pressable style={[styles.modalSheet, { paddingBottom: bottomPad + 16 }]}>
-            <Text style={styles.modalTitle}>Select Student</Text>
-            <FlatList
-              data={students}
-              keyExtractor={(item, i) => `${item}-${i}`}
-              style={styles.modalList}
-              renderItem={({ item }) => (
-                <Pressable
-                  onPress={() => {
-                    setShowPicker(false);
-                    navigateToSheet(item);
-                  }}
-                  style={({ pressed }) => [styles.modalRow, pressed && { opacity: 0.7 }]}
-                >
-                  <Ionicons name="person-outline" size={18} color={Colors.accent} />
-                  <Text style={styles.modalRowText}>{item}</Text>
-                </Pressable>
-              )}
-            />
-            <Pressable
-              onPress={() => {
-                setShowPicker(false);
-                navigateToSheet();
-              }}
-              style={({ pressed }) => [styles.modalBlank, pressed && { opacity: 0.7 }]}
-            >
-              <Text style={styles.modalBlankText}>Blank Sheet (no student)</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
     </View>
   );
 }
@@ -610,54 +563,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: "Inter_700Bold",
     color: Colors.background,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: Colors.overlay,
-    justifyContent: "flex-end",
-  },
-  modalSheet: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    maxHeight: "60%",
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
-    marginBottom: 16,
-    textAlign: "center",
-  },
-  modalList: {
-    flexGrow: 0,
-  },
-  modalRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderColor: Colors.border,
-  },
-  modalRowText: {
-    fontSize: 16,
-    fontFamily: "Inter_500Medium",
-    color: Colors.textPrimary,
-  },
-  modalBlank: {
-    marginTop: 12,
-    paddingVertical: 14,
-    alignItems: "center",
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  modalBlankText: {
-    fontSize: 14,
-    fontFamily: "Inter_500Medium",
-    color: Colors.textSecondary,
   },
 });

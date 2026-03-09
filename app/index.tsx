@@ -157,7 +157,7 @@ export default function ScannerScreen() {
       if (!result.found) { setSheetDetected(false); return; }
 
       // Sheet found and scanned in one pass — navigate immediately
-      console.log(`[scan] found! student=${result.studentName ?? 'none'} quizId=${result.quizId ?? 'none'}`);
+      console.log(`[scan] found! studentId=${result.studentId ?? 'none'}`);
       navigating = true;
       setSheetDetected(true);
       isScanningRef.current = true;
@@ -175,7 +175,7 @@ export default function ScannerScreen() {
           corners: JSON.stringify(result.corners),
           imageSize: JSON.stringify(result.imageSize),
           // debugImage: b64,
-          ...(result.studentName ? { studentName: result.studentName } : {}),
+          ...(result.studentId !== undefined ? { studentId: String(result.studentId) } : {}),
         },
       });
     } catch {
