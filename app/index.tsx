@@ -151,7 +151,7 @@ export default function ScannerScreen() {
   const stableCountRef = useRef(0);
   const [waitingForClear, setWaitingForClear] = useState(false); // UI state for "remove sheet" message
   const waitForClearRef = useRef(false); // ref mirror for detection loop
-  const STABLE_THRESHOLD = 3; // require 3 consecutive frames with all 4 corners locked
+  const STABLE_THRESHOLD = 1; // scan on first frame with all corners locked
 
   // Pre-load native OpenCV on mount to avoid lag on first detection frame
   useEffect(() => { warmupOpenCV(); }, []);
@@ -196,25 +196,27 @@ export default function ScannerScreen() {
     try {
       const t0 = Date.now();
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.5,
+        quality: 0.1,
         base64: false,
         skipProcessing: true,
       });
       const t1 = Date.now();
       const framePos = await getFramePos();
       if (!framePos) { resetCorners(); return; }
-      const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 640, 0.5);
+
+      // Use tiny image (280px) for fast corner detection; upgrade to 480px only for scanning
+      const detectB64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 280, 0.15);
       const t2 = Date.now();
-      if (!b64) { resetCorners(); return; }
+      if (!detectB64) { resetCorners(); return; }
 
       // Stage 1: Lightweight detection — check which corner marks are visible
-      const detect = await detectSheet(b64);
+      const detect = await detectSheet(detectB64);
       const t3 = Date.now();
-      console.log(`[perf] capture=${t1-t0}ms crop=${t2-t1}ms detect=${t3-t2}ms (${(b64.length/1024).toFixed(0)}KB)`);
+      console.log(`[perf] capture=${t1-t0}ms crop=${t2-t1}ms detect=${t3-t2}ms (${(detectB64.length/1024).toFixed(0)}KB)`);
 
       // Map each detected partial corner to frame space and check if inside target box
-      const imgW = detect.imageSize?.[0] ?? 640;
-      const imgH = detect.imageSize?.[1] ?? (640 * FRAME_H / FRAME_W);
+      const imgW = detect.imageSize?.[0] ?? 280;
+      const imgH = detect.imageSize?.[1] ?? (280 * FRAME_H / FRAME_W);
       const locked: [boolean, boolean, boolean, boolean] = [false, false, false, false];
 
       for (let i = 0; i < 4; i++) {
@@ -242,9 +244,18 @@ export default function ScannerScreen() {
         return;
       }
 
-      // All 4 marks inside their target boxes — run full scan immediately
+      // All 4 marks inside their target boxes — take higher-quality capture for scanning
       stableCountRef.current++;
       if (stableCountRef.current < STABLE_THRESHOLD) return;
+
+      // Re-capture at higher resolution for accurate bubble detection
+      const scanPhoto = await cameraRef.current!.takePictureAsync({
+        quality: 0.3,
+        base64: false,
+        skipProcessing: true,
+      });
+      const b64 = await cropToFrame(scanPhoto.uri, scanPhoto.width, scanPhoto.height, framePos, 480, 0.3);
+      if (!b64) { stableCountRef.current = 0; return; }
 
       const result = await detectAndScan(b64, questions, choiceCount);
       const t4 = Date.now();
@@ -297,7 +308,7 @@ export default function ScannerScreen() {
         let scannedImage = b64;
         if (result.corners) {
           try {
-            const debugPath = photo.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
+            const debugPath = scanPhoto.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
             generateDebugImage(b64, result.corners as [[number,number],[number,number],[number,number],[number,number]], result.answers, questions, choiceCount, debugPath);
             const debugResult = await ImageManipulator.manipulateAsync(
               `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
@@ -315,7 +326,7 @@ export default function ScannerScreen() {
       isDetectingRef.current = false;
       // Chain: schedule next detection unless we're navigating to results
       if (!navigating) {
-        detectLoopRef.current = setTimeout(runDetect, 100);
+        detectLoopRef.current = setTimeout(runDetect, 50);
       }
     }
   }, [questions, choiceCount, getFramePos]);
@@ -638,11 +649,11 @@ export default function ScannerScreen() {
         entering={FadeInDown.duration(500).delay(300)}
         style={[styles.bottomPanel, { paddingBottom: bottomPad + 16 }]}
       >
-        <View style={styles.answerKeyHeader}>
+        {/* <View style={styles.answerKeyHeader}>
           <Text style={styles.answerKeyTitle}>Answer Key</Text>
           <View style={styles.answerKeyDot} />
           <Text style={styles.answerKeyCount}>{questions.length} Questions</Text>
-        </View>
+        </View> */}
 
         <View style={styles.answerKeyRow}>
           {questions.map((q) => (
