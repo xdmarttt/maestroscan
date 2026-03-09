@@ -29,27 +29,55 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, QuizQuestion } from "@/lib/quiz-storage";
-import { detectAndScan, scanSheet } from "@/lib/scan-offline";
+import { detectAndScan, detectSheet, scanSheet } from "@/lib/scan-offline";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
-// Big square viewfinder — easy to aim at the paper like ZipGrade
-const FRAME_W = SCREEN_WIDTH * 0.92;
-const FRAME_H = FRAME_W; // square
-// 4 individual square targets for each corner registration mark
-// The answer sheet is 320×450 (portrait). Inside the square viewfinder,
-// the sheet fills the height, so paper width = FRAME_W × (320/450).
-const PAPER_IN_FRAME_W = FRAME_W * (320 / 450);
-const PAPER_OFFSET_X = (FRAME_W - PAPER_IN_FRAME_W) / 2;
-// Mark centers in the viewfinder (accounting for centered portrait sheet)
-const MARK_X = [
-  PAPER_OFFSET_X + (19.6 / 320) * PAPER_IN_FRAME_W,   // left marks
-  PAPER_OFFSET_X + (300.4 / 320) * PAPER_IN_FRAME_W,   // right marks
+// Edge-to-edge viewfinder — teachers fill the camera with the paper (like ZipGrade)
+const FRAME_W = SCREEN_WIDTH;
+const FRAME_H = Math.min(FRAME_W * 1.4, SCREEN_HEIGHT * 0.55);
+const TARGET_SIZE = 80;
+const CROP_MARGIN = 0.08; // must match cropToFrame default margin
+
+// Target box rects in frame-relative coordinates [TL, TR, BL, BR]
+const TARGET_RECTS = [
+  { x: 0, y: 0 },
+  { x: FRAME_W - TARGET_SIZE, y: 0 },
+  { x: 0, y: FRAME_H - TARGET_SIZE },
+  { x: FRAME_W - TARGET_SIZE, y: FRAME_H - TARGET_SIZE },
 ];
-const MARK_Y = [
-  (28.0 / 450) * FRAME_H,   // top marks
-  (422.0 / 450) * FRAME_H,  // bottom marks
-];
-const TARGET_SIZE = 64;
+
+/**
+ * Map a corner from cropped-image coordinates to frame-relative coordinates.
+ * The cropped image includes CROP_MARGIN around the frame, so we subtract that offset.
+ */
+function cornerToFrame(
+  cx: number, cy: number,
+  imgW: number, imgH: number,
+): { x: number; y: number } {
+  const marginFrac = CROP_MARGIN / (1 + 2 * CROP_MARGIN);
+  const frameStartX = marginFrac * imgW;
+  const frameStartY = marginFrac * imgH;
+  const frameW = imgW / (1 + 2 * CROP_MARGIN);
+  const frameH = imgH / (1 + 2 * CROP_MARGIN);
+  return {
+    x: ((cx - frameStartX) / frameW) * FRAME_W,
+    y: ((cy - frameStartY) / frameH) * FRAME_H,
+  };
+}
+
+/** Check if a point is inside its corresponding target box (with tolerance) */
+function isInsideTarget(
+  pt: { x: number; y: number },
+  target: { x: number; y: number },
+  tolerance = 20,
+): boolean {
+  return (
+    pt.x >= target.x - tolerance &&
+    pt.x <= target.x + TARGET_SIZE + tolerance &&
+    pt.y >= target.y - tolerance &&
+    pt.y <= target.y + TARGET_SIZE + tolerance
+  );
+}
 
 // Orient → crop to frame area → resize. Returns base64 JPEG or null.
 // Optimized: single ImageManipulator call using photo dimensions from camera.
@@ -101,7 +129,7 @@ export default function ScannerScreen() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [choiceCount, setChoiceCount] = useState<4 | 5>(4);
-  const [sheetDetected, setSheetDetected] = useState(false);
+  const [cornersLocked, setCornersLocked] = useState<[boolean, boolean, boolean, boolean]>([false, false, false, false]);
   const cameraRef = useRef<any>(null);
   const frameRef = useRef<View>(null);
   const isScanningRef = useRef(false);
@@ -109,6 +137,8 @@ export default function ScannerScreen() {
   const framePosRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const detectLoopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBarcodeRef = useRef<string | null>(null);
+  const stableCountRef = useRef(0);
+  const STABLE_THRESHOLD = 2; // consecutive detections before triggering full scan
 
   // Native barcode scanner callback — ref-only, no state updates, no re-renders
   const handleBarcodeScanned = useCallback((result: { data: string; type: string }) => {
@@ -130,12 +160,11 @@ export default function ScannerScreen() {
     return pos;
   }, []);
 
-  // Single-pass detect+scan poll: captures a frame, runs detection and (if found)
-  // full bubble scanning in one OpenCV session. Navigates to results instantly.
-  // Chain-based: schedules next poll immediately after current completes (no wasted interval).
+  // Two-stage detection loop (like ZipGrade):
+  // Stage 1: lightweight detectSheet() to check if 4 corner marks are visible → corners go green
+  // Stage 2: after STABLE_THRESHOLD consecutive detections, run full detectAndScan() → navigate
   const runDetect = useCallback(async () => {
     if (isScanningRef.current || isDetectingRef.current || !cameraRef.current || !frameRef.current) {
-      // Retry shortly if not ready yet
       detectLoopRef.current = setTimeout(runDetect, 200);
       return;
     }
@@ -145,6 +174,7 @@ export default function ScannerScreen() {
     }
     isDetectingRef.current = true;
     let navigating = false;
+    const resetCorners = () => { setCornersLocked([false, false, false, false]); stableCountRef.current = 0; };
     try {
       const t0 = Date.now();
       const photo = await cameraRef.current.takePictureAsync({
@@ -152,54 +182,79 @@ export default function ScannerScreen() {
         base64: false,
         skipProcessing: true,
       });
-      const t1 = Date.now();
       const framePos = await getFramePos();
-      if (!framePos) { setSheetDetected(false); return; }
+      if (!framePos) { resetCorners(); return; }
       const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 800, 0.7);
-      const t2 = Date.now();
-      if (!b64) { setSheetDetected(false); return; }
+      if (!b64) { resetCorners(); return; }
 
+      // Stage 1: Lightweight detection — check which corner marks are visible
+      const detect = await detectSheet(b64);
+      const t1 = Date.now();
+
+      // Map each detected partial corner to frame space and check if inside target box
+      const imgW = detect.imageSize?.[0] ?? 800;
+      const imgH = detect.imageSize?.[1] ?? (800 * FRAME_H / FRAME_W);
+      const locked: [boolean, boolean, boolean, boolean] = [false, false, false, false];
+
+      for (let i = 0; i < 4; i++) {
+        const pt = detect.partial[i];
+        if (!pt) continue;
+        const mapped = cornerToFrame(pt[0], pt[1], imgW, imgH);
+        locked[i] = isInsideTarget(mapped, TARGET_RECTS[i]);
+      }
+
+      setCornersLocked(locked);
+      const allLocked = locked.every(Boolean);
+      console.log(`[detect] corners=${locked.map(b => b ? "Y" : ".")} allValid=${detect.found} (${t1-t0}ms)`);
+
+      if (!allLocked) {
+        stableCountRef.current = 0;
+        return;
+      }
+
+      // All 4 marks inside their target boxes!
+      stableCountRef.current++;
+      console.log(`[detect] all locked — stable=${stableCountRef.current}/${STABLE_THRESHOLD}`);
+
+      // Stage 2: Wait for stable alignment before running expensive full scan
+      if (stableCountRef.current < STABLE_THRESHOLD) return;
+
+      // Stable alignment confirmed — run full bubble scan
       const result = await detectAndScan(b64, questions, choiceCount);
-      const t3 = Date.now();
-      console.log(`[perf] capture=${t1-t0}ms crop=${t2-t1}ms scan=${t3-t2}ms total=${t3-t0}ms`);
-      if (!result.found) { setSheetDetected(false); return; }
+      const t2 = Date.now();
+      console.log(`[scan] full scan (${t2-t1}ms) found=${result.found}`);
 
-      // Sheet found and scanned in one pass — navigate immediately
+      if (!result.found) {
+        // Marks were visible but full scan failed — keep trying
+        stableCountRef.current = STABLE_THRESHOLD - 1;
+        return;
+      }
+
+      // Success — navigate to results
       const barcode = lastBarcodeRef.current;
-      console.log(`[scan] found! studentId=${barcode ?? 'none'}`);
+      console.log(`[scan] done! studentId=${barcode ?? 'none'} total=${t2-t0}ms`);
       navigating = true;
-      setSheetDetected(true);
+      stableCountRef.current = 0;
       isScanningRef.current = true;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsScanning(true);
       setScanDone(true);
 
-      // Fire-and-forget: take HQ photo and upload to debug server
-      const hostUri = Constants.expoConfig?.hostUri ?? Constants.experienceUrl ?? "";
-      const debugHost = hostUri.split(":")[0] || "localhost";
-      const debugUrl = `http://${debugHost}:5001/api/debug-capture`;
-      (async () => {
-        try {
-          const hqPhoto = await cameraRef.current.takePictureAsync({
-            quality: 0.9,
-            base64: false,
-            skipProcessing: false,
-          });
-          const fp = await getFramePos();
-          if (!fp) return;
-          const hqB64 = await cropToFrame(hqPhoto.uri, hqPhoto.width, hqPhoto.height, fp, 1200, 0.9, 0);
-          if (!hqB64) return;
-          console.log(`[debug] uploading HQ image (${(hqB64.length / 1024).toFixed(0)}KB)`);
-          const r = await fetch(debugUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ imageBase64: hqB64, studentId: barcode, answers: result.answers }),
-          });
-          console.log(`[debug] upload status=${r.status}`);
-        } catch (e) {
-          console.warn(`[debug] upload failed:`, e);
-        }
-      })();
+      // TODO: re-enable debug capture upload when needed
+      // (async () => {
+      //   const hostUri = Constants.expoConfig?.hostUri ?? Constants.experienceUrl ?? "";
+      //   const debugHost = hostUri.split(":")[0] || "localhost";
+      //   const debugUrl = `http://${debugHost}:5001/api/debug-capture`;
+      //   try {
+      //     const hqPhoto = await cameraRef.current.takePictureAsync({ quality: 0.9, base64: false, skipProcessing: false });
+      //     const fp = await getFramePos();
+      //     if (!fp) return;
+      //     const hqB64 = await cropToFrame(hqPhoto.uri, hqPhoto.width, hqPhoto.height, fp, 1200, 0.9, 0);
+      //     if (!hqB64) return;
+      //     const r = await fetch(debugUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageBase64: hqB64, studentId: barcode, answers: result.answers }) });
+      //     console.log(`[debug] upload status=${r.status}`);
+      //   } catch (e) { console.warn(`[debug] upload failed:`, e); }
+      // })();
 
       // Brief pause so user sees green feedback before navigation
       await new Promise((r) => setTimeout(r, 200));
@@ -217,7 +272,6 @@ export default function ScannerScreen() {
     } finally {
       isDetectingRef.current = false;
       // Chain: schedule next detection unless we're navigating to results
-      // 300ms gap gives camera time to adjust exposure/focus between captures
       if (!navigating) {
         detectLoopRef.current = setTimeout(runDetect, 300);
       }
@@ -232,22 +286,21 @@ export default function ScannerScreen() {
       setIsScanning(false);
       setScanDone(false);
       setScanError(null);
-      setSheetDetected(false);
+      setCornersLocked([false, false, false, false]);
       lastBarcodeRef.current = null;
+      stableCountRef.current = 0;
       framePosRef.current = null; // re-measure on focus (in case layout shifted)
       // Start chain-based detection loop
       detectLoopRef.current = setTimeout(runDetect, 100);
       return () => {
         if (detectLoopRef.current) clearTimeout(detectLoopRef.current);
         detectLoopRef.current = null;
-        setSheetDetected(false);
+        setCornersLocked([false, false, false, false]);
       };
     }, [runDetect])
   );
 
   const scanLineY = useSharedValue(0);
-  const frameGlow = useSharedValue(0);
-  const pulseScale = useSharedValue(1);
 
   useFocusEffect(
     useCallback(() => {
@@ -267,22 +320,6 @@ export default function ScannerScreen() {
       -1,
       false
     );
-    frameGlow.value = withRepeat(
-      withSequence(
-        withTiming(1, { duration: 1500 }),
-        withTiming(0.3, { duration: 1500 })
-      ),
-      -1,
-      true
-    );
-    pulseScale.value = withRepeat(
-      withSequence(
-        withTiming(1.04, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
-        withTiming(1, { duration: 1200, easing: Easing.inOut(Easing.ease) })
-      ),
-      -1,
-      true
-    );
   }, []);
 
   // No auto-detect — user manually aligns the sheet to the corner brackets and taps Scan
@@ -294,14 +331,6 @@ export default function ScannerScreen() {
     opacity: isScanning ? 1 : 0.5,
   }));
 
-  const frameGlowStyle = useAnimatedStyle(() => ({
-    opacity: frameGlow.value,
-    shadowOpacity: frameGlow.value * 0.8,
-  }));
-
-  const pulseStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: pulseScale.value }],
-  }));
 
   // Manual scan button fallback — takes a fresh high-quality photo
   const handleScan = useCallback(async () => {
@@ -426,29 +455,31 @@ export default function ScannerScreen() {
             </Pressable>
           </View>
         </View>
-        <Text style={[styles.headerSub, sheetDetected && { color: Colors.success }]}>
-          {sheetDetected ? "Sheet detected — scanning..." : "Point camera at the answer sheet"}
+        <Text style={[styles.headerSub, cornersLocked.every(Boolean) && { color: Colors.success }]}>
+          {cornersLocked.every(Boolean)
+            ? "All corners locked — scanning..."
+            : cornersLocked.some(Boolean)
+              ? `${cornersLocked.filter(Boolean).length}/4 corners aligned`
+              : "Point camera at the answer sheet"}
         </Text>
       </Animated.View>
 
       <View style={styles.frameContainer}>
-        <Animated.View ref={frameRef} style={[styles.frameWrapper, pulseStyle]}>
-          <Animated.View style={[styles.frameGlow, frameGlowStyle]} />
-
+        <View ref={frameRef} style={styles.frameWrapper}>
           <View style={styles.frame}>
-            {/* 4 corner target squares — one per registration mark */}
+            {/* 4 corner target squares — at the edges like ZipGrade */}
             {([
-              { top: MARK_Y[0] - TARGET_SIZE / 2, left: MARK_X[0] - TARGET_SIZE / 2 },
-              { top: MARK_Y[0] - TARGET_SIZE / 2, left: MARK_X[1] - TARGET_SIZE / 2 },
-              { top: MARK_Y[1] - TARGET_SIZE / 2, left: MARK_X[0] - TARGET_SIZE / 2 },
-              { top: MARK_Y[1] - TARGET_SIZE / 2, left: MARK_X[1] - TARGET_SIZE / 2 },
+              { top: 0, left: 0 },
+              { top: 0, left: FRAME_W - TARGET_SIZE },
+              { top: FRAME_H - TARGET_SIZE, left: 0 },
+              { top: FRAME_H - TARGET_SIZE, left: FRAME_W - TARGET_SIZE },
             ] as const).map((pos, i) => (
               <View
                 key={i}
                 style={[
                   styles.targetBox,
                   { top: pos.top, left: pos.left },
-                  sheetDetected && styles.targetBoxDetected,
+                  cornersLocked[i] && styles.targetBoxDetected,
                 ]}
               />
             ))}
@@ -474,10 +505,10 @@ export default function ScannerScreen() {
               )}
             </View>
           </View>
-        </Animated.View>
+        </View>
 
         <Animated.View entering={FadeInDown.duration(500).delay(200)}>
-          <Text style={styles.frameLabel}>Align 4 corner squares with targets — scans automatically</Text>
+          <Text style={styles.frameLabel}>Align paper corners with the 4 targets — scans automatically</Text>
         </Animated.View>
       </View>
 
@@ -605,17 +636,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  frameGlow: {
-    position: "absolute",
-    width: FRAME_W + 20,
-    height: FRAME_H + 20,
-    borderRadius: 4,
-    shadowColor: Colors.accent,
-    shadowOffset: { width: 0, height: 0 },
-    shadowRadius: 24,
-    shadowOpacity: 0.6,
-    backgroundColor: "transparent",
-  },
   frame: {
     width: FRAME_W,
     height: FRAME_H,
@@ -636,8 +656,8 @@ const styles = StyleSheet.create({
   scanLine: {
     position: "absolute",
     top: 0,
-    left: 8,
-    right: 8,
+    left: 0,
+    right: 0,
     height: 2,
     backgroundColor: Colors.scanLine,
     shadowColor: Colors.accent,

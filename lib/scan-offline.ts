@@ -231,18 +231,25 @@ function findMarkCandidates(
   return candidates;
 }
 
+interface MarkDetectionResult {
+  /** Validated corners [TL, TR, BL, BR] or null if geometric checks fail */
+  corners: [[number, number], [number, number], [number, number], [number, number]] | null;
+  /** Per-quadrant best candidate (even if full validation fails) */
+  partial: ([number, number] | null)[];
+}
+
 /**
  * Find 4 corner registration marks.
  * Downscales large images for speed and better threshold behavior,
  * then maps results back to original coordinates.
- * Returns [TL, TR, BL, BR] or null.
+ * Returns validated corners + per-quadrant partial results.
  */
 function findFourMarks(
   grayMat: ReturnType<typeof OpenCV.createObject>,
   pixels: Uint8Array,
   W: number,
   H: number
-): [[number, number], [number, number], [number, number], [number, number]] | null {
+): MarkDetectionResult {
   // Downscale large images — improves speed and threshold robustness.
   // Mark detection doesn't need full resolution.
   const MAX_DIM = 800;
@@ -272,13 +279,15 @@ function findFourMarks(
   const candidates = findMarkCandidates(blurred, sW);
   OpenCV.releaseBuffers([blurred.id]);
 
-  if (candidates.length < 4) return null;
+  const EMPTY: MarkDetectionResult = { corners: null, partial: [null, null, null, null] };
+
+  if (candidates.length < 4) return EMPTY;
 
   // Filter out small candidates (midpoints are 10×10, corners are 20×20).
   // Keep only candidates whose area is at least 40% of the largest candidate.
   const maxCandArea = Math.max(...candidates.map(c => c.area));
   const filtered = candidates.filter(c => c.area >= maxCandArea * 0.4);
-  if (filtered.length < 4) return null;
+  if (filtered.length < 4) return EMPTY;
   candidates.length = 0;
   candidates.push(...filtered);
 
@@ -299,31 +308,34 @@ function findFourMarks(
     { nx0: 0.45, nx1: 1.0, ny0: 0.45, ny1: 1.0 }, // BR
   ];
 
-  const corners: [number, number][] = [];
+  const partial: ([number, number] | null)[] = [];
   const cornerDarkness: number[] = [];
   for (const { nx0, nx1, ny0, ny1 } of quads) {
     const inQ = candidates.filter(
       (c) => c.cx >= nx0 * W && c.cx < nx1 * W && c.cy >= ny0 * H && c.cy < ny1 * H
     );
-    if (inQ.length === 0) return null;
+    if (inQ.length === 0) { partial.push(null); cornerDarkness.push(999); continue; }
 
     // Pick largest dark candidate — corners (20×20) are bigger than midpoints (10×10)
     const darkEnough = inQ.filter(
       (c) => ringMean(pixels, W, H, c.cx, c.cy, 0, 8) < 160
     );
-    if (darkEnough.length === 0) return null;
+    if (darkEnough.length === 0) { partial.push(null); cornerDarkness.push(999); continue; }
     const best = darkEnough.reduce((a, b) => (b.area > a.area ? b : a));
     const bestDark = ringMean(pixels, W, H, best.cx, best.cy, 0, 8);
-    corners.push([best.cx, best.cy]);
+    partial.push([best.cx, best.cy]);
     cornerDarkness.push(bestDark);
   }
 
+  // Need all 4 for geometric validation
+  if (partial.some(c => c === null)) return { corners: null, partial };
+
   // All 4 corners must be genuinely dark — reject random objects
   for (const d of cornerDarkness) {
-    if (d > 160) return null;
+    if (d > 160) return { corners: null, partial };
   }
 
-  const [tl, tr, bl, br] = corners as [
+  const [tl, tr, bl, br] = partial as [
     [number, number],
     [number, number],
     [number, number],
@@ -333,32 +345,29 @@ function findFourMarks(
   // Geometric validation
   const rectW = (tr[0] - tl[0] + br[0] - bl[0]) / 2;
   const rectH = (bl[1] - tl[1] + br[1] - tr[1]) / 2;
-  if (rectW < W * 0.10 || rectH < H * 0.10) return null;
+  if (rectW < W * 0.10 || rectH < H * 0.10) return { corners: null, partial };
 
   const aspect = rectH / (rectW + 1e-6);
-  if (aspect < 0.5 || aspect > 3.0) return null;
+  if (aspect < 0.5 || aspect > 3.0) return { corners: null, partial };
 
-  if (tl[0] >= tr[0] || bl[0] >= br[0] || tl[1] >= bl[1] || tr[1] >= br[1]) return null;
+  if (tl[0] >= tr[0] || bl[0] >= br[0] || tl[1] >= bl[1] || tr[1] >= br[1]) return { corners: null, partial };
 
-  // Parallel-sides check: top/bottom widths and left/right heights must be
-  // roughly similar. Rejects cases where one corner is on a different object
-  // (e.g. monitor icon detected as TL while sheet is lower in frame).
+  // Parallel-sides check
   const topW = tr[0] - tl[0];
   const botW = br[0] - bl[0];
   const leftH = bl[1] - tl[1];
   const rightH = br[1] - tr[1];
-  if (topW / botW < 0.3 || topW / botW > 3.0) return null;
-  if (leftH / rightH < 0.3 || leftH / rightH > 3.0) return null;
+  if (topW / botW < 0.3 || topW / botW > 3.0) return { corners: null, partial };
+  if (leftH / rightH < 0.3 || leftH / rightH > 3.0) return { corners: null, partial };
 
   // Contrast check: center of sheet must be brighter than the corner marks.
-  // Real sheets have dark marks on white paper (high contrast).
   const centerX = (tl[0] + tr[0] + bl[0] + br[0]) / 4;
   const centerY = (tl[1] + tr[1] + bl[1] + br[1]) / 4;
   const centerBright = ringMean(pixels, W, H, centerX, centerY, 0, 16);
   const avgCornerDark = cornerDarkness.reduce((a, b) => a + b, 0) / 4;
-  if (centerBright - avgCornerDark < 40) return null;
+  if (centerBright - avgCornerDark < 40) return { corners: null, partial };
 
-  return [tl, tr, bl, br];
+  return { corners: [tl, tr, bl, br], partial };
 }
 
 // ── Student ID barcode reading ───────────────────────────────────────────────
@@ -382,7 +391,12 @@ function findFourMarks(
 export async function detectSheet(base64: string): Promise<{
   found: boolean;
   corners?: number[][];
+  /** Per-corner candidates [TL, TR, BL, BR] — available even when found=false */
+  partial: ([number, number] | null)[];
+  /** Image dimensions of the processed frame */
+  imageSize?: [number, number];
 }> {
+  const noResult = { found: false, partial: [null, null, null, null] as ([number, number] | null)[] };
   if (!isNativeAvailable()) {
     try {
       const resp = await fetch(`${getApiBase()}/api/detect`, {
@@ -390,10 +404,11 @@ export async function detectSheet(base64: string): Promise<{
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ imageBase64: base64 }),
       });
-      return await resp.json();
+      const data = await resp.json();
+      return { ...noResult, ...data };
     } catch (e) {
       console.warn("[scan-offline] server detect fallback error:", e);
-      return { found: false };
+      return noResult;
     }
   }
   try {
@@ -403,14 +418,18 @@ export async function detectSheet(base64: string): Promise<{
     OpenCV.releaseBuffers([bgrMat.id]);
 
     const { cols: W, rows: H, buffer: pixels } = OpenCV.matToBuffer(grayMat, "uint8");
-    const corners = findFourMarks(grayMat, pixels, W, H);
+    const result = findFourMarks(grayMat, pixels, W, H);
     OpenCV.releaseBuffers([grayMat.id]);
 
-    if (!corners) return { found: false };
-    return { found: true, corners };
+    return {
+      found: result.corners !== null,
+      corners: result.corners ?? undefined,
+      partial: result.partial,
+      imageSize: [W, H],
+    };
   } catch (e) {
     console.warn("[scan-offline] detectSheet error:", e);
-    return { found: false };
+    return noResult;
   }
 }
 
@@ -443,12 +462,12 @@ export async function scanSheet(
   const { cols: W, rows: H, buffer: pixels } = OpenCV.matToBuffer(grayMat, "uint8");
 
   // 3. Detect 4 registration marks
-  const corners = findFourMarks(grayMat, pixels, W, H);
-  if (!corners) {
+  const markResult = findFourMarks(grayMat, pixels, W, H);
+  if (!markResult.corners) {
     OpenCV.releaseBuffers([grayMat.id]);
     throw new Error("Sheet not aligned — make sure all 4 corner marks are visible");
   }
-  const [tl, tr, bl, br] = corners;
+  const [tl, tr, bl, br] = markResult.corners;
 
   // 4. Perspective warp: detected corners → ideal 800×1125
   const p2f = (x: number, y: number) => OpenCV.createObject(ObjectType.Point2f, x, y);
@@ -566,13 +585,14 @@ export async function detectAndScan(
   OpenCV.releaseBuffers([bgrMat.id]);
 
   const { cols: W, rows: H, buffer: rawPixels } = OpenCV.matToBuffer(grayMat, "uint8");
-  const corners = findFourMarks(grayMat, rawPixels, W, H);
+  const markResult = findFourMarks(grayMat, rawPixels, W, H);
 
-  if (!corners) {
+  if (!markResult.corners) {
     OpenCV.releaseBuffers([grayMat.id]);
     return { found: false };
   }
 
+  const corners = markResult.corners;
   OpenCV.releaseBuffers([grayMat.id]);
 
   // Normalize pixel buffer to 0-255 — stabilizes ratios across exposure changes
@@ -590,7 +610,7 @@ export async function detectAndScan(
   // PerspT: map bubble positions from warped sheet coords → original image coords
   const layout = computeGridLayout(questions.length, choiceCount);
   const idealFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
-  const detectedFlat = corners.flatMap(([x, y]) => [x, y]);
+  const detectedFlat = corners.flatMap(([x, y]: [number, number]) => [x, y]);
   const invPersp = PerspT(idealFlat, detectedFlat);
 
   // Scale sampling radii from warped space to original image space
