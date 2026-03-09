@@ -18,8 +18,7 @@ import { computeGridLayout, SHEET_W, SHEET_H, idBubbleCenter, ID_DIGIT_COUNT, ID
 const MARK_SIZE = 20;
 const MARK_OFFSET_X = 9.6;
 const MARK_OFFSET_Y = 18;
-// Midpoint bars: 20×8 thin bars — aspect 0.4 fails contour detector's ≥0.5 filter
-const MID_BAR_H = 8;
+const MID_SIZE = 10; // Midpoint marks: smaller than corners so detector ignores them
 
 export default function SheetScreen() {
   const insets = useSafeAreaInsets();
@@ -79,9 +78,9 @@ export default function SheetScreen() {
           <View style={[styles.regMark, { left: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
           <View style={[styles.regMark, { right: MARK_OFFSET_X, bottom: MARK_OFFSET_Y }]} />
 
-          {/* Midpoint bars — validation marks at left & right edges */}
-          <View style={[styles.regBar, { left: MARK_OFFSET_X, top: (SHEET_H - MID_BAR_H) / 2 }]} />
-          <View style={[styles.regBar, { right: MARK_OFFSET_X, top: (SHEET_H - MID_BAR_H) / 2 }]} />
+          {/* Midpoint marks — smaller squares at left & right edges */}
+          <View style={[styles.midMark, { left: MARK_OFFSET_X + (MARK_SIZE - MID_SIZE) / 2, top: (SHEET_H - MID_SIZE) / 2 }]} />
+          <View style={[styles.midMark, { right: MARK_OFFSET_X + (MARK_SIZE - MID_SIZE) / 2, top: (SHEET_H - MID_SIZE) / 2 }]} />
 
           {/* Header bar — bordered */}
           <View style={styles.headerBar}>
@@ -305,10 +304,10 @@ const styles = StyleSheet.create({
     height: MARK_SIZE,
     backgroundColor: "#000000",
   },
-  regBar: {
+  midMark: {
     position: "absolute",
-    width: MARK_SIZE,
-    height: MID_BAR_H,
+    width: MID_SIZE,
+    height: MID_SIZE,
     backgroundColor: "#000000",
   },
   headerBar: {

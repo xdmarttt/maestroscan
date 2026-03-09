@@ -252,17 +252,16 @@ function drawSheet(canvas, opts) {
   for (const m of MARKS) {
     ctx.fillRect(m.x * S, m.y * S, MARK_SIZE * S, MARK_SIZE * S);
   }
-  // Midpoint bars — thin 20×8 at left & right edges for validation
-  const MID_BAR_H = 8, midY = (SHEET_H - MID_BAR_H) / 2;
-  ctx.fillRect(9.6 * S, midY * S, MARK_SIZE * S, MID_BAR_H * S);
-  ctx.fillRect((SHEET_W - 9.6 - MARK_SIZE) * S, midY * S, MARK_SIZE * S, MID_BAR_H * S);
+  // Midpoint marks — 10×10 squares (smaller than corners to avoid false detection)
+  const MID_SIZE = 10;
+  const midOff = (MARK_SIZE - MID_SIZE) / 2; // center within corner mark width
+  const midY = (SHEET_H - MID_SIZE) / 2;
+  ctx.fillRect((9.6 + midOff) * S, midY * S, MID_SIZE * S, MID_SIZE * S);
+  ctx.fillRect((SHEET_W - 9.6 - MARK_SIZE + midOff) * S, midY * S, MID_SIZE * S, MID_SIZE * S);
 
-  // ── Header bar (bordered, no fill) ──
+  // ── Header bar ──
   const barY = 50, barH = 38;
   const barX = 32, barW = SHEET_W - 64;
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 1.5 * S;
-  ctx.strokeRect(barX * S, barY * S, barW * S, barH * S);
 
   // Brand name
   ctx.fillStyle = '#999';

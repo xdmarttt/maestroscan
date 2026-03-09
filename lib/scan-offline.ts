@@ -292,23 +292,27 @@ function findFourMarks(
   ];
 
   const corners: [number, number][] = [];
+  const cornerDarkness: number[] = [];
   for (const { nx0, nx1, ny0, ny1 } of quads) {
     const inQ = candidates.filter(
       (c) => c.cx >= nx0 * W && c.cx < nx1 * W && c.cy >= ny0 * H && c.cy < ny1 * H
     );
     if (inQ.length === 0) return null;
 
-    // Pick darkest: solid black squares have lower mean in 8px radius
-    let best = inQ[0];
-    let bestDark = ringMean(pixels, W, H, best.cx, best.cy, 0, 8);
-    for (const cand of inQ.slice(1)) {
-      const d = ringMean(pixels, W, H, cand.cx, cand.cy, 0, 8);
-      if (d < bestDark) {
-        bestDark = d;
-        best = cand;
-      }
-    }
+    // Pick largest dark candidate — corners (20×20) are bigger than midpoints (10×10)
+    const darkEnough = inQ.filter(
+      (c) => ringMean(pixels, W, H, c.cx, c.cy, 0, 8) < 160
+    );
+    if (darkEnough.length === 0) return null;
+    const best = darkEnough.reduce((a, b) => (b.area > a.area ? b : a));
+    const bestDark = ringMean(pixels, W, H, best.cx, best.cy, 0, 8);
     corners.push([best.cx, best.cy]);
+    cornerDarkness.push(bestDark);
+  }
+
+  // All 4 corners must be genuinely dark — reject random objects
+  for (const d of cornerDarkness) {
+    if (d > 160) return null;
   }
 
   const [tl, tr, bl, br] = corners as [
@@ -324,9 +328,27 @@ function findFourMarks(
   if (rectW < W * 0.10 || rectH < H * 0.10) return null;
 
   const aspect = rectH / (rectW + 1e-6);
-  if (aspect < 0.5 || aspect > 4.0) return null;
+  if (aspect < 0.5 || aspect > 3.0) return null;
 
   if (tl[0] >= tr[0] || bl[0] >= br[0] || tl[1] >= bl[1] || tr[1] >= br[1]) return null;
+
+  // Parallel-sides check: top/bottom widths and left/right heights must be
+  // roughly similar. Rejects cases where one corner is on a different object
+  // (e.g. monitor icon detected as TL while sheet is lower in frame).
+  const topW = tr[0] - tl[0];
+  const botW = br[0] - bl[0];
+  const leftH = bl[1] - tl[1];
+  const rightH = br[1] - tr[1];
+  if (topW / botW < 0.3 || topW / botW > 3.0) return null;
+  if (leftH / rightH < 0.3 || leftH / rightH > 3.0) return null;
+
+  // Contrast check: center of sheet must be brighter than the corner marks.
+  // Real sheets have dark marks on white paper (high contrast).
+  const centerX = (tl[0] + tr[0] + bl[0] + br[0]) / 4;
+  const centerY = (tl[1] + tr[1] + bl[1] + br[1]) / 4;
+  const centerBright = ringMean(pixels, W, H, centerX, centerY, 0, 16);
+  const avgCornerDark = cornerDarkness.reduce((a, b) => a + b, 0) / 4;
+  if (centerBright - avgCornerDark < 40) return null;
 
   return [tl, tr, bl, br];
 }
