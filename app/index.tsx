@@ -138,7 +138,7 @@ export default function ScannerScreen() {
   const detectLoopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBarcodeRef = useRef<string | null>(null);
   const stableCountRef = useRef(0);
-  const STABLE_THRESHOLD = 2; // consecutive detections before triggering full scan
+  const STABLE_THRESHOLD = 1; // fire immediately when all 4 corners lock
 
   // Native barcode scanner callback — ref-only, no state updates, no re-renders
   const handleBarcodeScanned = useCallback((result: { data: string; type: string }) => {
@@ -184,7 +184,8 @@ export default function ScannerScreen() {
       });
       const framePos = await getFramePos();
       if (!framePos) { resetCorners(); return; }
-      const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 800, 0.7);
+      // Crop at 640px for fast detection (mark finding doesn't need high res)
+      const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 640, 0.6);
       if (!b64) { resetCorners(); return; }
 
       // Stage 1: Lightweight detection — check which corner marks are visible
@@ -192,8 +193,8 @@ export default function ScannerScreen() {
       const t1 = Date.now();
 
       // Map each detected partial corner to frame space and check if inside target box
-      const imgW = detect.imageSize?.[0] ?? 800;
-      const imgH = detect.imageSize?.[1] ?? (800 * FRAME_H / FRAME_W);
+      const imgW = detect.imageSize?.[0] ?? 640;
+      const imgH = detect.imageSize?.[1] ?? (640 * FRAME_H / FRAME_W);
       const locked: [boolean, boolean, boolean, boolean] = [false, false, false, false];
 
       for (let i = 0; i < 4; i++) {
@@ -205,28 +206,23 @@ export default function ScannerScreen() {
 
       setCornersLocked(locked);
       const allLocked = locked.every(Boolean);
-      console.log(`[detect] corners=${locked.map(b => b ? "Y" : ".")} allValid=${detect.found} (${t1-t0}ms)`);
 
       if (!allLocked) {
         stableCountRef.current = 0;
         return;
       }
 
-      // All 4 marks inside their target boxes!
+      // All 4 marks inside their target boxes — run full scan immediately
       stableCountRef.current++;
-      console.log(`[detect] all locked — stable=${stableCountRef.current}/${STABLE_THRESHOLD}`);
-
-      // Stage 2: Wait for stable alignment before running expensive full scan
       if (stableCountRef.current < STABLE_THRESHOLD) return;
 
-      // Stable alignment confirmed — run full bubble scan
+      // Full scan on same image (detectAndScan re-detects marks internally, ~50ms overhead)
       const result = await detectAndScan(b64, questions, choiceCount);
       const t2 = Date.now();
-      console.log(`[scan] full scan (${t2-t1}ms) found=${result.found}`);
+      console.log(`[scan] detect=${t1-t0}ms scan=${t2-t1}ms total=${t2-t0}ms`);
 
       if (!result.found) {
-        // Marks were visible but full scan failed — keep trying
-        stableCountRef.current = STABLE_THRESHOLD - 1;
+        stableCountRef.current = 0;
         return;
       }
 
@@ -240,24 +236,8 @@ export default function ScannerScreen() {
       setIsScanning(true);
       setScanDone(true);
 
-      // TODO: re-enable debug capture upload when needed
-      // (async () => {
-      //   const hostUri = Constants.expoConfig?.hostUri ?? Constants.experienceUrl ?? "";
-      //   const debugHost = hostUri.split(":")[0] || "localhost";
-      //   const debugUrl = `http://${debugHost}:5001/api/debug-capture`;
-      //   try {
-      //     const hqPhoto = await cameraRef.current.takePictureAsync({ quality: 0.9, base64: false, skipProcessing: false });
-      //     const fp = await getFramePos();
-      //     if (!fp) return;
-      //     const hqB64 = await cropToFrame(hqPhoto.uri, hqPhoto.width, hqPhoto.height, fp, 1200, 0.9, 0);
-      //     if (!hqB64) return;
-      //     const r = await fetch(debugUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ imageBase64: hqB64, studentId: barcode, answers: result.answers }) });
-      //     console.log(`[debug] upload status=${r.status}`);
-      //   } catch (e) { console.warn(`[debug] upload failed:`, e); }
-      // })();
-
-      // Brief pause so user sees green feedback before navigation
-      await new Promise((r) => setTimeout(r, 200));
+      // Quick green flash before navigation
+      await new Promise((r) => setTimeout(r, 80));
       router.push({
         pathname: "/results",
         params: {
@@ -273,7 +253,7 @@ export default function ScannerScreen() {
       isDetectingRef.current = false;
       // Chain: schedule next detection unless we're navigating to results
       if (!navigating) {
-        detectLoopRef.current = setTimeout(runDetect, 300);
+        detectLoopRef.current = setTimeout(runDetect, 100);
       }
     }
   }, [questions, choiceCount, getFramePos]);
@@ -366,7 +346,6 @@ export default function ScannerScreen() {
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setScanDone(true);
-      await new Promise((r) => setTimeout(r, 300));
 
       router.push({
         pathname: "/results",
