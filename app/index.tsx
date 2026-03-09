@@ -21,6 +21,7 @@ import Animated, {
   interpolate,
   FadeIn,
   FadeInDown,
+  ZoomIn,
 } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -28,7 +29,7 @@ import Constants from "expo-constants";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
-import { loadQuiz, QuizQuestion } from "@/lib/quiz-storage";
+import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
 import { detectAndScan, detectSheet, scanSheet } from "@/lib/scan-offline";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -130,6 +131,15 @@ export default function ScannerScreen() {
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [choiceCount, setChoiceCount] = useState<4 | 5>(4);
   const [cornersLocked, setCornersLocked] = useState<[boolean, boolean, boolean, boolean]>([false, false, false, false]);
+  const [scanResult, setScanResult] = useState<{
+    answers: string[];
+    score: number;
+    total: number;
+    percentage: number;
+    studentName: string | null;
+    studentId: string | null;
+  } | null>(null);
+  const scanResultRef = useRef<boolean>(false);
   const cameraRef = useRef<any>(null);
   const frameRef = useRef<View>(null);
   const isScanningRef = useRef(false);
@@ -164,6 +174,8 @@ export default function ScannerScreen() {
   // Stage 1: lightweight detectSheet() to check if 4 corner marks are visible → corners go green
   // Stage 2: after STABLE_THRESHOLD consecutive detections, run full detectAndScan() → navigate
   const runDetect = useCallback(async () => {
+    // Don't detect while result popup is visible
+    if (scanResultRef.current) return;
     if (isScanningRef.current || isDetectingRef.current || !cameraRef.current || !frameRef.current) {
       detectLoopRef.current = setTimeout(runDetect, 200);
       return;
@@ -178,19 +190,22 @@ export default function ScannerScreen() {
     try {
       const t0 = Date.now();
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.7,
+        quality: 0.3,
         base64: false,
         skipProcessing: true,
       });
+      const t1 = Date.now();
       const framePos = await getFramePos();
       if (!framePos) { resetCorners(); return; }
-      // Crop at 640px for fast detection (mark finding doesn't need high res)
-      const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 640, 0.6);
+      // Low-res crop — mark detection doesn't need quality (ZipGrade uses low qual too)
+      const b64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 480, 0.3);
+      const t2 = Date.now();
       if (!b64) { resetCorners(); return; }
 
       // Stage 1: Lightweight detection — check which corner marks are visible
       const detect = await detectSheet(b64);
-      const t1 = Date.now();
+      const t3 = Date.now();
+      console.log(`[perf] capture=${t1-t0}ms crop=${t2-t1}ms detect=${t3-t2}ms (${(b64.length/1024).toFixed(0)}KB)`);
 
       // Map each detected partial corner to frame space and check if inside target box
       const imgW = detect.imageSize?.[0] ?? 640;
@@ -218,35 +233,47 @@ export default function ScannerScreen() {
 
       // Full scan on same image (detectAndScan re-detects marks internally, ~50ms overhead)
       const result = await detectAndScan(b64, questions, choiceCount);
-      const t2 = Date.now();
-      console.log(`[scan] detect=${t1-t0}ms scan=${t2-t1}ms total=${t2-t0}ms`);
+      const t4 = Date.now();
+      console.log(`[scan] fullScan=${t4-t3}ms total=${t4-t0}ms`);
 
       if (!result.found) {
         stableCountRef.current = 0;
         return;
       }
 
-      // Success — navigate to results
+      // Success — show result popup
       const barcode = lastBarcodeRef.current;
-      console.log(`[scan] done! studentId=${barcode ?? 'none'} total=${t2-t0}ms`);
       navigating = true;
       stableCountRef.current = 0;
       isScanningRef.current = true;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setIsScanning(true);
-      setScanDone(true);
 
-      // Quick green flash before navigation
-      await new Promise((r) => setTimeout(r, 80));
-      router.push({
-        pathname: "/results",
-        params: {
-          answers: JSON.stringify(result.answers),
-          questions: JSON.stringify(questions),
-          choiceCount: String(choiceCount),
-          ...(barcode ? { studentId: barcode } : {}),
-        },
+      // Compute score
+      const score = result.answers.reduce(
+        (n, a, i) => n + (a === questions[i]?.correct ? 1 : 0), 0
+      );
+      const total = questions.length;
+
+      // Lookup student name from roster
+      let studentName: string | null = null;
+      if (barcode) {
+        try {
+          const roster = await loadRoster();
+          const idx = Number(barcode);
+          if (roster.students[idx]) studentName = roster.students[idx];
+        } catch { /* no roster */ }
+      }
+
+      scanResultRef.current = true;
+      setScanResult({
+        answers: result.answers,
+        score,
+        total,
+        percentage: total > 0 ? Math.round((score / total) * 100) : 0,
+        studentName,
+        studentId: barcode ?? null,
       });
+      setIsScanning(false);
     } catch {
       // silent — detection errors don't block scanning
     } finally {
@@ -263,9 +290,11 @@ export default function ScannerScreen() {
     useCallback(() => {
       isScanningRef.current = false;
       isDetectingRef.current = false;
+      scanResultRef.current = false;
       setIsScanning(false);
       setScanDone(false);
       setScanError(null);
+      setScanResult(null);
       setCornersLocked([false, false, false, false]);
       lastBarcodeRef.current = null;
       stableCountRef.current = 0;
@@ -332,11 +361,11 @@ export default function ScannerScreen() {
         }
       );
       const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.9,
+        quality: 0.4,
         base64: false,
-        skipProcessing: false,
+        skipProcessing: true,
       });
-      const base64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 1200, 0.85);
+      const base64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 640, 0.4);
       if (!base64) throw new Error("Image capture failed");
 
       const data = await scanSheet(base64, questions, choiceCount);
@@ -345,15 +374,31 @@ export default function ScannerScreen() {
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setScanDone(true);
 
-      router.push({
-        pathname: "/results",
-        params: {
-          answers: JSON.stringify(data.answers),
-          questions: JSON.stringify(questions),
-          choiceCount: String(choiceCount),
-        },
+      const score = data.answers.reduce(
+        (n, a, i) => n + (a === questions[i]?.correct ? 1 : 0), 0
+      );
+      const total = questions.length;
+
+      // Lookup student name from roster
+      let studentName: string | null = null;
+      const barcode = lastBarcodeRef.current;
+      if (barcode) {
+        try {
+          const roster = await loadRoster();
+          const idx = Number(barcode);
+          if (roster.students[idx]) studentName = roster.students[idx];
+        } catch { /* no roster */ }
+      }
+
+      scanResultRef.current = true;
+      setScanResult({
+        answers: data.answers,
+        score,
+        total,
+        percentage: total > 0 ? Math.round((score / total) * 100) : 0,
+        studentName,
+        studentId: barcode ?? null,
       });
     } catch (err: any) {
       console.error("Scan failed:", err);
@@ -365,6 +410,41 @@ export default function ScannerScreen() {
       setScanDone(false);
     }
   }, [questions, choiceCount]);
+
+  // Dismiss popup → resume scanning
+  const handleScanNext = useCallback(() => {
+    scanResultRef.current = false;
+    setScanResult(null);
+    setScanError(null);
+    isScanningRef.current = false;
+    stableCountRef.current = 0;
+    setCornersLocked([false, false, false, false]);
+    lastBarcodeRef.current = null;
+    // Restart detection loop
+    detectLoopRef.current = setTimeout(runDetect, 100);
+  }, [runDetect]);
+
+  // Navigate to full results page
+  const handleViewDetails = useCallback(() => {
+    if (!scanResult) return;
+    router.push({
+      pathname: "/results",
+      params: {
+        answers: JSON.stringify(scanResult.answers),
+        questions: JSON.stringify(questions),
+        studentId: lastBarcodeRef.current ?? "",
+      },
+    });
+    scanResultRef.current = false;
+    setScanResult(null);
+    isScanningRef.current = false;
+  }, [scanResult, questions]);
+
+  const getScoreColor = (pct: number) => {
+    if (pct >= 80) return Colors.success;
+    if (pct >= 50) return Colors.warning;
+    return Colors.error;
+  };
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
@@ -550,6 +630,56 @@ export default function ScannerScreen() {
           </Text>
         </Pressable>
       </Animated.View>
+
+      {/* Scan result popup overlay */}
+      {scanResult && (
+        <Animated.View entering={FadeIn.duration(200)} style={styles.popupBackdrop}>
+          <Animated.View entering={ZoomIn.duration(300).delay(100)} style={styles.popupCard}>
+            <View style={[styles.popupScoreBadge, { backgroundColor: `${getScoreColor(scanResult.percentage)}15` }]}>
+              <Ionicons
+                name={scanResult.percentage >= 80 ? "checkmark-circle" : scanResult.percentage >= 50 ? "remove-circle" : "close-circle"}
+                size={28}
+                color={getScoreColor(scanResult.percentage)}
+              />
+            </View>
+
+            <Text style={[styles.popupScore, { color: getScoreColor(scanResult.percentage) }]}>
+              {scanResult.score} / {scanResult.total}
+            </Text>
+            <Text style={[styles.popupPercent, { color: getScoreColor(scanResult.percentage) }]}>
+              {scanResult.percentage}%
+            </Text>
+
+            {(scanResult.studentName || scanResult.studentId) && (
+              <View style={styles.popupStudentRow}>
+                <Ionicons name="person-outline" size={14} color={Colors.textSecondary} />
+                <Text style={styles.popupStudentName}>
+                  {scanResult.studentName
+                    ? `${scanResult.studentName} (ID: ${scanResult.studentId})`
+                    : `Student ID: ${scanResult.studentId}`}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.popupButtons}>
+              <Pressable
+                onPress={handleScanNext}
+                style={({ pressed }) => [styles.popupBtnPrimary, pressed && { opacity: 0.8 }]}
+              >
+                <MaterialCommunityIcons name="line-scan" size={18} color={Colors.background} />
+                <Text style={styles.popupBtnPrimaryText}>Scan Next</Text>
+              </Pressable>
+              <Pressable
+                onPress={handleViewDetails}
+                style={({ pressed }) => [styles.popupBtnSecondary, pressed && { opacity: 0.8 }]}
+              >
+                <Text style={styles.popupBtnSecondaryText}>View Details</Text>
+                <Ionicons name="arrow-forward" size={16} color={Colors.accent} />
+              </Pressable>
+            </View>
+          </Animated.View>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -834,5 +964,88 @@ const styles = StyleSheet.create({
   permissionText: {
     color: Colors.textSecondary,
     fontFamily: "Inter_400Regular",
+  },
+  popupBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: Colors.overlay,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 100,
+  },
+  popupCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 24,
+    paddingVertical: 32,
+    paddingHorizontal: 28,
+    alignItems: "center",
+    width: SCREEN_WIDTH - 64,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 4,
+  },
+  popupScoreBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  popupScore: {
+    fontSize: 36,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: -1,
+  },
+  popupPercent: {
+    fontSize: 18,
+    fontFamily: "Inter_600SemiBold",
+    marginBottom: 4,
+  },
+  popupStudentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  popupStudentName: {
+    fontSize: 14,
+    fontFamily: "Inter_500Medium",
+    color: Colors.textSecondary,
+  },
+  popupButtons: {
+    width: "100%",
+    gap: 10,
+    marginTop: 20,
+  },
+  popupBtnPrimary: {
+    backgroundColor: Colors.accent,
+    borderRadius: 14,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  popupBtnPrimaryText: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    color: Colors.background,
+  },
+  popupBtnSecondary: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: 14,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  popupBtnSecondaryText: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.accent,
   },
 });
