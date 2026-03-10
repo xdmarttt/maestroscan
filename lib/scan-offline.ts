@@ -651,7 +651,7 @@ export async function detectAndScan(
   const gradMean = gradSum / gradN;
   const blurVariance = gradSumSq / gradN - gradMean * gradMean;
   console.log(`[scan] blur variance: ${blurVariance.toFixed(1)}`);
-  if (blurVariance < 200) {
+  if (blurVariance < 250) {
     OpenCV.releaseBuffers([grayMat.id]);
     return { found: false, blurry: true } as any;
   }
@@ -665,56 +665,47 @@ export async function detectAndScan(
   const corners = markResult.corners;
   OpenCV.releaseBuffers([grayMat.id]);
 
-  // Midpoint curvature check: if midpoint marks are detected, verify they fall
-  // where expected based on corners. Displacement = paper is curved/folded.
-  const [tl, tr, bl, br] = corners;
+  // ── Fold / curvature detection via reprojection error ────────────────────
+  // Project detected midpoints through the 4-corner homography into warped space.
+  // On FLAT paper all 6 marks are coplanar → residual ≈ 0 (only detection jitter).
+  // On CURVED paper midpoints leave the plane → large residual.
+  // This cancels perspective, rotation, and scale — only measures actual curvature.
   if (markResult.midpoints) {
     const [leftMid, rightMid] = markResult.midpoints;
-    // Expected midpoints: halfway between top and bottom corners on each side
-    const expectedLM: [number, number] = [(tl[0] + bl[0]) / 2, (tl[1] + bl[1]) / 2];
-    const expectedRM: [number, number] = [(tr[0] + br[0]) / 2, (tr[1] + br[1]) / 2];
-    const sheetH = (bl[1] - tl[1] + br[1] - tr[1]) / 2;
 
-    const displacements: number[] = [];
+    // Ideal midpoint positions in warped space (center of left/right edges)
+    const idealLM: [number, number] = [
+      (IDEAL_CORNERS[0][0] + IDEAL_CORNERS[2][0]) / 2,
+      (IDEAL_CORNERS[0][1] + IDEAL_CORNERS[2][1]) / 2,
+    ];
+    const idealRM: [number, number] = [
+      (IDEAL_CORNERS[1][0] + IDEAL_CORNERS[3][0]) / 2,
+      (IDEAL_CORNERS[1][1] + IDEAL_CORNERS[3][1]) / 2,
+    ];
+
+    // Forward perspective: detected image coords → ideal warped coords
+    const detFlat = corners.flatMap(([x, y]: [number, number]) => [x, y]);
+    const idlFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
+    const fwdPersp = PerspT(detFlat, idlFlat);
+
+    const errors: number[] = [];
     if (leftMid) {
-      const dx = leftMid[0] - expectedLM[0], dy = leftMid[1] - expectedLM[1];
-      displacements.push(Math.sqrt(dx * dx + dy * dy));
+      const [px, py] = fwdPersp.transform(leftMid[0], leftMid[1]);
+      errors.push(Math.sqrt((px - idealLM[0]) ** 2 + (py - idealLM[1]) ** 2));
     }
     if (rightMid) {
-      const dx = rightMid[0] - expectedRM[0], dy = rightMid[1] - expectedRM[1];
-      displacements.push(Math.sqrt(dx * dx + dy * dy));
+      const [px, py] = fwdPersp.transform(rightMid[0], rightMid[1]);
+      errors.push(Math.sqrt((px - idealRM[0]) ** 2 + (py - idealRM[1]) ** 2));
     }
 
-    if (displacements.length > 0) {
-      const maxDisp = Math.max(...displacements);
-      const dispPct = (maxDisp / sheetH) * 100;
-      console.log(`[scan] midpoint displacement: ${maxDisp.toFixed(1)}px (${dispPct.toFixed(1)}% of height), detected=${displacements.length}`);
-      // Only reject if both midpoints detected and displacement is significant.
-      // Single midpoint can be a false detection (bubble/text artifact).
-      if (displacements.length >= 2 && dispPct > 5) {
+    if (errors.length > 0) {
+      const maxErr = Math.max(...errors);
+      console.log(`[scan] fold reprojection error: ${maxErr.toFixed(1)}px (detected=${errors.length})`);
+      // Flat paper: < 5px noise. Curved paper: > 15px typically.
+      if (errors.length >= 2 && maxErr > 10) {
         return { found: false, folded: true } as any;
       }
     }
-  }
-
-  // Rectangularity check: measure angle deviation from 90° at each corner.
-  // Folded/curved paper distorts the quadrilateral.
-  const angleDeg = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number) => {
-    const v1x = ax - bx, v1y = ay - by;
-    const v2x = cx - bx, v2y = cy - by;
-    const dot = v1x * v2x + v1y * v2y;
-    const mag = Math.sqrt(v1x * v1x + v1y * v1y) * Math.sqrt(v2x * v2x + v2y * v2y);
-    return Math.abs(Math.acos(dot / (mag + 1e-6)) * (180 / Math.PI) - 90);
-  };
-  const maxAngleDev = Math.max(
-    angleDeg(bl[0], bl[1], tl[0], tl[1], tr[0], tr[1]), // TL corner
-    angleDeg(tl[0], tl[1], tr[0], tr[1], br[0], br[1]), // TR corner
-    angleDeg(tl[0], tl[1], bl[0], bl[1], br[0], br[1]), // BL corner
-    angleDeg(bl[0], bl[1], br[0], br[1], tr[0], tr[1]), // BR corner
-  );
-  console.log(`[scan] rectangularity: maxAngleDev=${maxAngleDev.toFixed(1)}°`);
-  if (maxAngleDev > 20) {
-    return { found: false, folded: true } as any;
   }
 
 
@@ -748,9 +739,20 @@ export async function detectAndScan(
   const adjOuterR2 = Math.max(adjOuterR1 + 1, Math.round(layout.outerR2 * radiusScale));
 
   // Sample answer bubbles via PerspT on original pixels.
-  // Search a small neighborhood around each mapped position to find the actual
-  // bubble center — compensates for paper curvature shifting positions.
-  const searchStep = Math.max(2, Math.round(adjInnerR * 0.6));
+  // Search a neighborhood around each mapped position to find the actual
+  // bubble center — compensates for lens distortion & perspective error
+  // (worst at sheet center, farthest from all 4 registration marks).
+  // Compute spacing in original image pixels to size the search safely.
+  const p00 = layout.bubbleCenter(0, 0);
+  const p10 = layout.bubbleCenter(Math.min(1, layout.questionCount - 1), 0);
+  const p01 = layout.bubbleCenter(0, Math.min(1, layout.choiceCount - 1));
+  const vSpacingOrig = Math.abs(p10.ny - p00.ny) * WARP_H * radiusScale;
+  const hSpacingOrig = Math.abs(p01.nx - p00.nx) * WARP_W * radiusScale;
+  const minSpacingOrig = Math.min(hSpacingOrig, vSpacingOrig) || 20;
+  // Search up to 30% of spacing — wide enough for perspective error, safe from adjacent bubbles
+  const maxSafeSearch = Math.floor(minSpacingOrig / 2 - adjInnerR);
+  const searchStep = Math.max(2, Math.min(maxSafeSearch, Math.round(minSpacingOrig * 0.30)));
+  console.log(`[scan] searchStep=${searchStep}px (spacing=${minSpacingOrig.toFixed(1)}px, safe=${maxSafeSearch}px)`);
   const answers: string[] = [];
   const confidence: number[] = [];
   for (let q = 0; q < layout.questionCount; q++) {
