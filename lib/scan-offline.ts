@@ -247,6 +247,8 @@ interface MarkDetectionResult {
   corners: [[number, number], [number, number], [number, number], [number, number]] | null;
   /** Per-quadrant best candidate (even if full validation fails) */
   partial: ([number, number] | null)[];
+  /** Detected midpoint marks [leftMid, rightMid] or null */
+  midpoints?: ([number, number] | null)[];
 }
 
 /**
@@ -299,10 +301,8 @@ function findFourMarks(
   const maxCandArea = Math.max(...candidates.map(c => c.area));
   const filtered = candidates.filter(c => c.area >= maxCandArea * 0.4);
   if (filtered.length < 4) return EMPTY;
-  candidates.length = 0;
-  candidates.push(...filtered);
 
-  // Scale candidates back to original image coordinates
+  // Scale ALL candidates back to original image coordinates (before separating)
   if (needScale) {
     const invScale = 1 / scale;
     for (const c of candidates) {
@@ -310,6 +310,12 @@ function findFourMarks(
       c.cy *= invScale;
     }
   }
+
+  // Keep all candidates (incl. small midpoint marks) for midpoint detection later
+  const allCandidates = candidates.map(c => ({ ...c })); // deep copy
+
+  candidates.length = 0;
+  candidates.push(...filtered);
 
   // One darkest candidate per quadrant (using original-resolution pixels)
   const quads = [
@@ -378,7 +384,37 @@ function findFourMarks(
   const avgCornerDark = cornerDarkness.reduce((a, b) => a + b, 0) / 4;
   if (centerBright - avgCornerDark < 25) return { corners: null, partial };
 
-  return { corners: [tl, tr, bl, br], partial };
+  // Detect midpoint marks (smaller 10×10 squares at left & right edges, vertically centered).
+  // These are in allCandidates but were filtered out of corners by the 40% area filter.
+  // Look for small dark candidates in the left-mid and right-mid zones.
+  const midY0 = 0.35, midY1 = 0.65; // vertical center band
+  const midpoints: ([number, number] | null)[] = [null, null];
+
+  // Left midpoint: left 20% of sheet, vertical center
+  const leftMidCands = allCandidates.filter(c =>
+    c.cx < tl[0] + (tr[0] - tl[0]) * 0.15 &&
+    c.cy >= tl[1] + (bl[1] - tl[1]) * midY0 &&
+    c.cy <= tl[1] + (bl[1] - tl[1]) * midY1 &&
+    c.area < maxCandArea * 0.5 // smaller than corners
+  );
+  if (leftMidCands.length > 0) {
+    const best = leftMidCands.reduce((a, b) => ringMean(pixels, W, H, a.cx, a.cy, 0, 6) < ringMean(pixels, W, H, b.cx, b.cy, 0, 6) ? a : b);
+    midpoints[0] = [best.cx, best.cy];
+  }
+
+  // Right midpoint: right 20% of sheet, vertical center
+  const rightMidCands = allCandidates.filter(c =>
+    c.cx > tr[0] - (tr[0] - tl[0]) * 0.15 &&
+    c.cy >= tr[1] + (br[1] - tr[1]) * midY0 &&
+    c.cy <= tr[1] + (br[1] - tr[1]) * midY1 &&
+    c.area < maxCandArea * 0.5
+  );
+  if (rightMidCands.length > 0) {
+    const best = rightMidCands.reduce((a, b) => ringMean(pixels, W, H, a.cx, a.cy, 0, 6) < ringMean(pixels, W, H, b.cx, b.cy, 0, 6) ? a : b);
+    midpoints[1] = [best.cx, best.cy];
+  }
+
+  return { corners: [tl, tr, bl, br], partial, midpoints };
 }
 
 // ── Student ID barcode reading ───────────────────────────────────────────────
@@ -629,9 +665,40 @@ export async function detectAndScan(
   const corners = markResult.corners;
   OpenCV.releaseBuffers([grayMat.id]);
 
+  // Midpoint curvature check: if midpoint marks are detected, verify they fall
+  // where expected based on corners. Displacement = paper is curved/folded.
+  const [tl, tr, bl, br] = corners;
+  if (markResult.midpoints) {
+    const [leftMid, rightMid] = markResult.midpoints;
+    // Expected midpoints: halfway between top and bottom corners on each side
+    const expectedLM: [number, number] = [(tl[0] + bl[0]) / 2, (tl[1] + bl[1]) / 2];
+    const expectedRM: [number, number] = [(tr[0] + br[0]) / 2, (tr[1] + br[1]) / 2];
+    const sheetH = (bl[1] - tl[1] + br[1] - tr[1]) / 2;
+
+    const displacements: number[] = [];
+    if (leftMid) {
+      const dx = leftMid[0] - expectedLM[0], dy = leftMid[1] - expectedLM[1];
+      displacements.push(Math.sqrt(dx * dx + dy * dy));
+    }
+    if (rightMid) {
+      const dx = rightMid[0] - expectedRM[0], dy = rightMid[1] - expectedRM[1];
+      displacements.push(Math.sqrt(dx * dx + dy * dy));
+    }
+
+    if (displacements.length > 0) {
+      const maxDisp = Math.max(...displacements);
+      const dispPct = (maxDisp / sheetH) * 100;
+      console.log(`[scan] midpoint displacement: ${maxDisp.toFixed(1)}px (${dispPct.toFixed(1)}% of height), detected=${displacements.length}`);
+      // Only reject if both midpoints detected and displacement is significant.
+      // Single midpoint can be a false detection (bubble/text artifact).
+      if (displacements.length >= 2 && dispPct > 5) {
+        return { found: false, folded: true } as any;
+      }
+    }
+  }
+
   // Rectangularity check: measure angle deviation from 90° at each corner.
   // Folded/curved paper distorts the quadrilateral.
-  const [tl, tr, bl, br] = corners;
   const angleDeg = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number) => {
     const v1x = ax - bx, v1y = ay - by;
     const v2x = cx - bx, v2y = cy - by;
@@ -650,35 +717,7 @@ export async function detectAndScan(
     return { found: false, folded: true } as any;
   }
 
-  // Fold shadow check: sample brightness at a grid of points inside the sheet.
-  // Flat paper has uniform white; folded paper has dark shadow bands.
-  const samplePts: number[] = [];
-  for (let fy = 0.2; fy <= 0.8; fy += 0.15) {
-    for (let fx = 0.15; fx <= 0.85; fx += 0.15) {
-      // Bilinear interpolation between corners
-      const topX = tl[0] + (tr[0] - tl[0]) * fx;
-      const topY = tl[1] + (tr[1] - tl[1]) * fx;
-      const botX = bl[0] + (br[0] - bl[0]) * fx;
-      const botY = bl[1] + (br[1] - bl[1]) * fx;
-      const px = Math.round(topX + (botX - topX) * fy);
-      const py = Math.round(topY + (botY - topY) * fy);
-      if (px >= 0 && px < W && py >= 0 && py < H) {
-        samplePts.push(rawPixels[py * W + px]);
-      }
-    }
-  }
-  if (samplePts.length > 4) {
-    let sMin = 255, sMax = 0;
-    for (const v of samplePts) {
-      if (v < sMin) sMin = v;
-      if (v > sMax) sMax = v;
-    }
-    const brightnessRange = sMax - sMin;
-    console.log(`[scan] fold check: brightnessRange=${brightnessRange} min=${sMin} max=${sMax}`);
-    if (brightnessRange > 100) {
-      return { found: false, folded: true } as any;
-    }
-  }
+
 
   // Normalize pixel buffer to 0-255 — stabilizes ratios across exposure changes
   let pMin = 255, pMax = 0;
@@ -714,7 +753,6 @@ export async function detectAndScan(
   const searchStep = Math.max(2, Math.round(adjInnerR * 0.6));
   const answers: string[] = [];
   const confidence: number[] = [];
-  const outerRings: number[] = []; // track white-paper brightness per bubble
   for (let q = 0; q < layout.questionCount; q++) {
     const ratios: number[] = [];
     for (let c = 0; c < layout.choiceCount; c++) {
@@ -730,7 +768,6 @@ export async function detectAndScan(
       }
       const inner = ringMean(pixels, W, H, bestCx, bestCy, 0, adjInnerR);
       const outer = ringMean(pixels, W, H, bestCx, bestCy, adjOuterR1, adjOuterR2);
-      outerRings.push(outer);
       ratios.push((outer - inner) / Math.max(outer, 64));
     }
     let best = -Infinity, second = -Infinity, bestIdx = 0;
@@ -745,19 +782,6 @@ export async function detectAndScan(
     } else {
       answers.push("?");
       confidence.push(0);
-    }
-  }
-
-  // Paper flatness check: outer ring (white paper) brightness should be consistent.
-  // High variance = uneven surface (fold, curve, tilt) even without visible shadows.
-  if (outerRings.length > 4) {
-    let orSum = 0, orSumSq = 0;
-    for (const v of outerRings) { orSum += v; orSumSq += v * v; }
-    const orMean = orSum / outerRings.length;
-    const orStd = Math.sqrt(orSumSq / outerRings.length - orMean * orMean);
-    console.log(`[scan] flatness: outerRing mean=${orMean.toFixed(1)} std=${orStd.toFixed(1)}`);
-    if (orStd > 35) {
-      return { found: false, folded: true } as any;
     }
   }
 
