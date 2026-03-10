@@ -11,12 +11,13 @@ interface CameraScannerProps {
   onBarcodeScanned?: (result: { data: string; type: string }) => void;
   frameProcessor?: any;
   isActive?: boolean;
+  zoom?: number;
 }
 
 // Native: VisionCamera with frame processor + code scanner support
 const NativeCameraScanner = VC
   ? forwardRef<any, CameraScannerProps>(
-      ({ onBarcodeScanned, frameProcessor, isActive = true }, ref) => {
+      ({ onBarcodeScanned, frameProcessor, isActive = true, zoom = 1 }, ref) => {
         const device = VC.useCameraDevice("back");
 
         const codeScanner = useMemo(() => {
@@ -46,6 +47,7 @@ const NativeCameraScanner = VC
             codeScanner={codeScanner}
             photo={true}
             video={true}
+            zoom={zoom}
             pixelFormat="yuv"
             outputOrientation="device"
           />

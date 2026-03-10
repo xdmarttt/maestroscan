@@ -533,7 +533,7 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
-      <CameraScanner ref={cameraRef} onBarcodeScanned={handleBarcodeScanned} frameProcessor={frameProcessor} />
+      <CameraScanner ref={cameraRef} onBarcodeScanned={handleBarcodeScanned} frameProcessor={frameProcessor} zoom={1.5} />
 
       <View style={[StyleSheet.absoluteFill, styles.overlay]} />
 
