@@ -252,27 +252,19 @@ export default function ScannerScreen() {
         isScanningShared.value = false;
         stableCountRef.current = 0;
         if ((result as any).blurry) {
+          setScanError("Image too blurry — hold steady");
           setTimeout(() => setScanError(null), 2000);
+        } else if ((result as any).folded) {
+          setScanError("Paper appears folded or curved — flatten the sheet");
+          setTimeout(() => setScanError(null), 3000);
         }
         return;
       }
 
-      // Reject scan if too many unreadable answers — likely not flat
-      const missedCount = result.answers.filter(a => a === "?").length;
-      if (missedCount > Math.max(2, questionsRef.current.length * 0.15)) {
-        isScanningRef.current = false;
-        isScanningShared.value = false;
-        stableCountRef.current = 0;
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        setScanError("Place the sheet on a flat surface for accurate scanning");
-        setTimeout(() => setScanError(null), 3000);
-        return;
-      }
-
-      // Warn if some answers are unreadable
-      const unreadable = result.answers.filter(a => a === "?").length;
-      if (unreadable > 0) {
-        setScanError(`${unreadable} answer${unreadable > 1 ? "s" : ""} unreadable — check for unfilled bubbles or folded paper`);
+      // Info: note blank answers (could be intentionally left blank by student)
+      const blankCount = result.answers.filter(a => a === "?").length;
+      if (blankCount > 0) {
+        setScanError(`${blankCount} blank/unreadable answer${blankCount > 1 ? "s" : ""} detected`);
         setTimeout(() => setScanError(null), 4000);
       }
 

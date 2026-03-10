@@ -629,6 +629,57 @@ export async function detectAndScan(
   const corners = markResult.corners;
   OpenCV.releaseBuffers([grayMat.id]);
 
+  // Rectangularity check: measure angle deviation from 90° at each corner.
+  // Folded/curved paper distorts the quadrilateral.
+  const [tl, tr, bl, br] = corners;
+  const angleDeg = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number) => {
+    const v1x = ax - bx, v1y = ay - by;
+    const v2x = cx - bx, v2y = cy - by;
+    const dot = v1x * v2x + v1y * v2y;
+    const mag = Math.sqrt(v1x * v1x + v1y * v1y) * Math.sqrt(v2x * v2x + v2y * v2y);
+    return Math.abs(Math.acos(dot / (mag + 1e-6)) * (180 / Math.PI) - 90);
+  };
+  const maxAngleDev = Math.max(
+    angleDeg(bl[0], bl[1], tl[0], tl[1], tr[0], tr[1]), // TL corner
+    angleDeg(tl[0], tl[1], tr[0], tr[1], br[0], br[1]), // TR corner
+    angleDeg(tl[0], tl[1], bl[0], bl[1], br[0], br[1]), // BL corner
+    angleDeg(bl[0], bl[1], br[0], br[1], tr[0], tr[1]), // BR corner
+  );
+  console.log(`[scan] rectangularity: maxAngleDev=${maxAngleDev.toFixed(1)}°`);
+  if (maxAngleDev > 20) {
+    return { found: false, folded: true } as any;
+  }
+
+  // Fold shadow check: sample brightness at a grid of points inside the sheet.
+  // Flat paper has uniform white; folded paper has dark shadow bands.
+  const samplePts: number[] = [];
+  for (let fy = 0.2; fy <= 0.8; fy += 0.15) {
+    for (let fx = 0.15; fx <= 0.85; fx += 0.15) {
+      // Bilinear interpolation between corners
+      const topX = tl[0] + (tr[0] - tl[0]) * fx;
+      const topY = tl[1] + (tr[1] - tl[1]) * fx;
+      const botX = bl[0] + (br[0] - bl[0]) * fx;
+      const botY = bl[1] + (br[1] - bl[1]) * fx;
+      const px = Math.round(topX + (botX - topX) * fy);
+      const py = Math.round(topY + (botY - topY) * fy);
+      if (px >= 0 && px < W && py >= 0 && py < H) {
+        samplePts.push(rawPixels[py * W + px]);
+      }
+    }
+  }
+  if (samplePts.length > 4) {
+    let sMin = 255, sMax = 0;
+    for (const v of samplePts) {
+      if (v < sMin) sMin = v;
+      if (v > sMax) sMax = v;
+    }
+    const brightnessRange = sMax - sMin;
+    console.log(`[scan] fold check: brightnessRange=${brightnessRange} min=${sMin} max=${sMax}`);
+    if (brightnessRange > 100) {
+      return { found: false, folded: true } as any;
+    }
+  }
+
   // Normalize pixel buffer to 0-255 — stabilizes ratios across exposure changes
   let pMin = 255, pMax = 0;
   for (let i = 0; i < rawPixels.length; i++) {
@@ -663,6 +714,7 @@ export async function detectAndScan(
   const searchStep = Math.max(2, Math.round(adjInnerR * 0.6));
   const answers: string[] = [];
   const confidence: number[] = [];
+  const outerRings: number[] = []; // track white-paper brightness per bubble
   for (let q = 0; q < layout.questionCount; q++) {
     const ratios: number[] = [];
     for (let c = 0; c < layout.choiceCount; c++) {
@@ -678,6 +730,7 @@ export async function detectAndScan(
       }
       const inner = ringMean(pixels, W, H, bestCx, bestCy, 0, adjInnerR);
       const outer = ringMean(pixels, W, H, bestCx, bestCy, adjOuterR1, adjOuterR2);
+      outerRings.push(outer);
       ratios.push((outer - inner) / Math.max(outer, 64));
     }
     let best = -Infinity, second = -Infinity, bestIdx = 0;
@@ -692,6 +745,19 @@ export async function detectAndScan(
     } else {
       answers.push("?");
       confidence.push(0);
+    }
+  }
+
+  // Paper flatness check: outer ring (white paper) brightness should be consistent.
+  // High variance = uneven surface (fold, curve, tilt) even without visible shadows.
+  if (outerRings.length > 4) {
+    let orSum = 0, orSumSq = 0;
+    for (const v of outerRings) { orSum += v; orSumSq += v * v; }
+    const orMean = orSum / outerRings.length;
+    const orStd = Math.sqrt(orSumSq / outerRings.length - orMean * orMean);
+    console.log(`[scan] flatness: outerRing mean=${orMean.toFixed(1)} std=${orStd.toFixed(1)}`);
+    if (orStd > 35) {
+      return { found: false, folded: true } as any;
     }
   }
 
