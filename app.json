@@ -47,7 +47,10 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-camera"
+      "expo-camera",
+      ["react-native-vision-camera", {
+        "cameraPermissionText": "GradeSnap needs camera access to scan answer sheets."
+      }]
     ],
     "experiments": {
       "typedRoutes": true,

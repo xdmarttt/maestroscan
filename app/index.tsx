@@ -30,55 +30,17 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
-import { detectAndScan, detectSheet, scanSheet, generateDebugImage, warmupOpenCV } from "@/lib/scan-offline";
+import { detectAndScan, scanSheet, generateDebugImage, warmupOpenCV } from "@/lib/scan-offline";
+import { useFrameProcessor } from "react-native-vision-camera";
+import { useResizePlugin } from "vision-camera-resize-plugin";
+import { useRunOnJS } from "react-native-worklets-core";
+import { detectCornersFromFrame } from "@/lib/detect-frame";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // Edge-to-edge viewfinder — teachers fill the camera with the paper (like ZipGrade)
 const FRAME_W = SCREEN_WIDTH;
 const FRAME_H = Math.min(FRAME_W * 1.4, SCREEN_HEIGHT * 0.65);
-const TARGET_SIZE = 110;
-const CROP_MARGIN = 0.08; // must match cropToFrame default margin
 
-// Target box rects in frame-relative coordinates [TL, TR, BL, BR]
-const TARGET_RECTS = [
-  { x: 0, y: 0 },
-  { x: FRAME_W - TARGET_SIZE, y: 0 },
-  { x: 0, y: FRAME_H - TARGET_SIZE },
-  { x: FRAME_W - TARGET_SIZE, y: FRAME_H - TARGET_SIZE },
-];
-
-/**
- * Map a corner from cropped-image coordinates to frame-relative coordinates.
- * The cropped image includes CROP_MARGIN around the frame, so we subtract that offset.
- */
-function cornerToFrame(
-  cx: number, cy: number,
-  imgW: number, imgH: number,
-): { x: number; y: number } {
-  const marginFrac = CROP_MARGIN / (1 + 2 * CROP_MARGIN);
-  const frameStartX = marginFrac * imgW;
-  const frameStartY = marginFrac * imgH;
-  const frameW = imgW / (1 + 2 * CROP_MARGIN);
-  const frameH = imgH / (1 + 2 * CROP_MARGIN);
-  return {
-    x: ((cx - frameStartX) / frameW) * FRAME_W,
-    y: ((cy - frameStartY) / frameH) * FRAME_H,
-  };
-}
-
-/** Check if a point is inside its corresponding target box (with tolerance) */
-function isInsideTarget(
-  pt: { x: number; y: number },
-  target: { x: number; y: number },
-  tolerance = 20,
-): boolean {
-  return (
-    pt.x >= target.x - tolerance &&
-    pt.x <= target.x + TARGET_SIZE + tolerance &&
-    pt.y >= target.y - tolerance &&
-    pt.y <= target.y + TARGET_SIZE + tolerance
-  );
-}
 
 // Orient → crop to frame area → resize. Returns base64 JPEG or null.
 // Optimized: single ImageManipulator call using photo dimensions from camera.
@@ -119,7 +81,19 @@ async function cropToFrame(
   return result.base64 ?? null;
 }
 
-// No CornerBracket — using a single rounded-border box like ZipGrade
+// Corner viewfinder boxes (like ZipGrade) — large squares with thick borders
+const GUIDE_SIZE = 100;
+const GUIDE_INSET = 8;
+const GUIDE_BORDER = 3.5;
+const GUIDE_RADIUS = 8;
+
+// Pre-computed guide box regions in frame-normalized coords (0-1)
+const GUIDE_BOXES = [
+  { x0: GUIDE_INSET / FRAME_W, y0: GUIDE_INSET / FRAME_H, x1: (GUIDE_INSET + GUIDE_SIZE) / FRAME_W, y1: (GUIDE_INSET + GUIDE_SIZE) / FRAME_H },
+  { x0: (FRAME_W - GUIDE_INSET - GUIDE_SIZE) / FRAME_W, y0: GUIDE_INSET / FRAME_H, x1: (FRAME_W - GUIDE_INSET) / FRAME_W, y1: (GUIDE_INSET + GUIDE_SIZE) / FRAME_H },
+  { x0: GUIDE_INSET / FRAME_W, y0: (FRAME_H - GUIDE_INSET - GUIDE_SIZE) / FRAME_H, x1: (GUIDE_INSET + GUIDE_SIZE) / FRAME_W, y1: (FRAME_H - GUIDE_INSET) / FRAME_H },
+  { x0: (FRAME_W - GUIDE_INSET - GUIDE_SIZE) / FRAME_W, y0: (FRAME_H - GUIDE_INSET - GUIDE_SIZE) / FRAME_H, x1: (FRAME_W - GUIDE_INSET) / FRAME_W, y1: (FRAME_H - GUIDE_INSET) / FRAME_H },
+];
 
 
 export default function ScannerScreen() {
@@ -131,6 +105,7 @@ export default function ScannerScreen() {
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [choiceCount, setChoiceCount] = useState<4 | 5>(4);
   const [cornersLocked, setCornersLocked] = useState<[boolean, boolean, boolean, boolean]>([false, false, false, false]);
+  const cornersLockedRef = useRef<[boolean, boolean, boolean, boolean]>([false, false, false, false]);
   const [scanResult, setScanResult] = useState<{
     answers: string[];
     score: number;
@@ -144,9 +119,7 @@ export default function ScannerScreen() {
   const cameraRef = useRef<any>(null);
   const frameRef = useRef<View>(null);
   const isScanningRef = useRef(false);
-  const isDetectingRef = useRef(false);
   const framePosRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
-  const detectLoopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastBarcodeRef = useRef<string | null>(null);
   const stableCountRef = useRef(0);
   const [waitingForClear, setWaitingForClear] = useState(false); // UI state for "remove sheet" message
@@ -176,112 +149,135 @@ export default function ScannerScreen() {
     return pos;
   }, []);
 
-  // Two-stage detection loop (like ZipGrade):
-  // Stage 1: lightweight detectSheet() to check if 4 corner marks are visible → corners go green
-  // Stage 2: after STABLE_THRESHOLD consecutive detections, run full detectAndScan() → navigate
-  const runDetect = useCallback(async () => {
-    // Don't detect while result popup is visible
-    if (scanResultRef.current) return;
-    if (isScanningRef.current || isDetectingRef.current || !cameraRef.current || !frameRef.current) {
-      detectLoopRef.current = setTimeout(runDetect, 200);
-      return;
-    }
-    if (questions.length === 0) {
-      detectLoopRef.current = setTimeout(runDetect, 500);
-      return;
-    }
-    isDetectingRef.current = true;
-    let navigating = false;
-    const resetCorners = () => { setCornersLocked([false, false, false, false]); stableCountRef.current = 0; };
-    try {
-      const t0 = Date.now();
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.1,
-        base64: false,
-        skipProcessing: true,
-      });
-      const t1 = Date.now();
-      const framePos = await getFramePos();
-      if (!framePos) { resetCorners(); return; }
+  // --- Frame processor detection (replaces setTimeout-based detection loop) ---
+  const questionsRef = useRef(questions);
+  questionsRef.current = questions;
+  const choiceCountRef = useRef(choiceCount);
+  choiceCountRef.current = choiceCount;
 
-      // Use tiny image (280px) for fast corner detection; upgrade to 480px only for scanning
-      const detectB64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 280, 0.15);
-      const t2 = Date.now();
-      if (!detectB64) { resetCorners(); return; }
+  const { resize } = useResizePlugin();
+  const lastDetectTime = useSharedValue(0);
 
-      // Stage 1: Lightweight detection — check which corner marks are visible
-      const detect = await detectSheet(detectB64);
-      const t3 = Date.now();
-      console.log(`[perf] capture=${t1-t0}ms crop=${t2-t1}ms detect=${t3-t2}ms (${(detectB64.length/1024).toFixed(0)}KB)`);
+  // Called from frame processor via runOnJS — handles guide box check + state updates
+  const onDetectionResult = useCallback((partial: ([number, number] | null)[], found: boolean, W: number, H: number) => {
+    if (scanResultRef.current || isScanningRef.current) return;
+    if (questionsRef.current.length === 0) return;
 
-      // Map each detected partial corner to frame space and check if inside target box
-      const imgW = detect.imageSize?.[0] ?? 280;
-      const imgH = detect.imageSize?.[1] ?? (280 * FRAME_H / FRAME_W);
-      const locked: [boolean, boolean, boolean, boolean] = [false, false, false, false];
-
-      for (let i = 0; i < 4; i++) {
-        const pt = detect.partial[i];
-        if (!pt) continue;
-        const mapped = cornerToFrame(pt[0], pt[1], imgW, imgH);
-        locked[i] = isInsideTarget(mapped, TARGET_RECTS[i]);
+    // Detection ran on full camera frame (resized) — corners are in normalized coords
+    // Map to frame-relative positions for guide box check
+    const locked: [boolean, boolean, boolean, boolean] = [false, false, false, false];
+    for (let i = 0; i < 4; i++) {
+      const pt = partial[i];
+      if (!pt) continue;
+      // Normalized position in the camera frame
+      const nx = pt[0] / W;
+      const ny = pt[1] / H;
+      const box = GUIDE_BOXES[i];
+      if (nx >= box.x0 && nx <= box.x1 && ny >= box.y0 && ny <= box.y1) {
+        locked[i] = true;
       }
+    }
 
+    // Update corners UI (only if changed)
+    const prev = cornersLockedRef.current;
+    if (prev[0] !== locked[0] || prev[1] !== locked[1] || prev[2] !== locked[2] || prev[3] !== locked[3]) {
+      cornersLockedRef.current = locked;
       setCornersLocked(locked);
-      const allLocked = locked.every(Boolean);
+    }
 
-      // After a scan, wait for the sheet to be removed before re-scanning
-      if (waitForClearRef.current) {
-        if (!allLocked) {
-          waitForClearRef.current = false;
-          setWaitingForClear(false); // sheet removed — ready for next scan
-        }
-        stableCountRef.current = 0;
-        return;
-      }
+    const allLocked = locked.every(Boolean) && found;
 
+    // After a scan, wait for the sheet to be removed before re-scanning
+    if (waitForClearRef.current) {
       if (!allLocked) {
-        stableCountRef.current = 0;
-        return;
+        waitForClearRef.current = false;
+        setWaitingForClear(false);
       }
+      stableCountRef.current = 0;
+      return;
+    }
 
-      // All 4 marks inside their target boxes — take higher-quality capture for scanning
-      stableCountRef.current++;
-      if (stableCountRef.current < STABLE_THRESHOLD) return;
+    if (!allLocked) {
+      stableCountRef.current = 0;
+      return;
+    }
 
-      // Re-capture at higher resolution for accurate bubble detection
-      const scanPhoto = await cameraRef.current!.takePictureAsync({
-        quality: 0.3,
-        base64: false,
-        skipProcessing: true,
-      });
-      const b64 = await cropToFrame(scanPhoto.uri, scanPhoto.width, scanPhoto.height, framePos, 480, 0.3);
-      if (!b64) { stableCountRef.current = 0; return; }
+    stableCountRef.current++;
+    if (stableCountRef.current >= STABLE_THRESHOLD) {
+      triggerScan();
+    }
+  }, []);
 
-      const result = await detectAndScan(b64, questions, choiceCount);
-      const t4 = Date.now();
-      console.log(`[scan] fullScan=${t4-t3}ms total=${t4-t0}ms`);
+  // Run on JS callback wrapper for frame processor
+  const onDetectionResultJS = useRunOnJS(onDetectionResult, [onDetectionResult]);
+
+  // Frame processor — runs on every camera frame, does corner detection in ~5-15ms
+  const frameProcessor = useFrameProcessor((frame) => {
+    "worklet";
+    // Throttle to ~15fps
+    const now = Date.now();
+    if (now - lastDetectTime.value < 66) return;
+    lastDetectTime.value = now;
+
+    const targetW = 200;
+    const targetH = Math.round(frame.height * (targetW / frame.width));
+    const resized = resize(frame, {
+      scale: { width: targetW, height: targetH },
+      pixelFormat: "bgr",
+      dataType: "uint8",
+    });
+
+    const result = detectCornersFromFrame(resized, targetW, targetH, 3);
+    onDetectionResultJS(result.partial, result.found, result.W, result.H);
+  }, [resize, lastDetectTime, onDetectionResultJS]);
+
+  // Scan capture — triggered when all 4 corners are stable (called from onDetectionResult)
+  const triggerScan = useCallback(async () => {
+    if (isScanningRef.current || !cameraRef.current) return;
+    isScanningRef.current = true;
+    stableCountRef.current = 0;
+
+    try {
+      const framePos = await getFramePos();
+      if (!framePos) { isScanningRef.current = false; return; }
+
+      // VisionCamera takePhoto for high-quality capture
+      const scanPhoto = await cameraRef.current.takePhoto({ qualityPrioritization: "speed" });
+      const photoUri = `file://${scanPhoto.path}`;
+      const b64 = await cropToFrame(photoUri, scanPhoto.width, scanPhoto.height, framePos, 480, 0.3);
+      if (!b64) { isScanningRef.current = false; stableCountRef.current = 0; return; }
+
+      const result = await detectAndScan(b64, questionsRef.current, choiceCountRef.current);
 
       if (!result.found) {
+        isScanningRef.current = false;
         stableCountRef.current = 0;
+        return;
+      }
+
+      // Reject scan if too many unreadable answers — likely not flat
+      const missedCount = result.answers.filter(a => a === "?").length;
+      if (missedCount > Math.max(2, questionsRef.current.length * 0.15)) {
+        isScanningRef.current = false;
+        stableCountRef.current = 0;
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        setScanError("Place the sheet on a flat surface for accurate scanning");
+        setTimeout(() => setScanError(null), 3000);
         return;
       }
 
       // Success — show result popup
       const barcode = lastBarcodeRef.current;
-      navigating = true;
       waitForClearRef.current = true;
       setWaitingForClear(true);
-      stableCountRef.current = 0;
-      isScanningRef.current = true;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // Compute score
+      const qs = questionsRef.current;
       const score = result.answers.reduce(
-        (n, a, i) => n + (a === questions[i]?.correct ? 1 : 0), 0
+        (n, a, i) => n + (a === qs[i]?.correct ? 1 : 0), 0
       );
-      const total = questions.length;
+      const total = qs.length;
 
-      // Show popup immediately — don't wait for debug image or roster
       scanResultRef.current = true;
       setScanResult({
         answers: result.answers,
@@ -294,7 +290,7 @@ export default function ScannerScreen() {
       });
       setIsScanning(false);
 
-      // Async: lookup student name + generate debug image, then update popup
+      // Async: lookup student name + generate debug image
       try {
         let studentName: string | null = null;
         if (barcode) {
@@ -308,34 +304,27 @@ export default function ScannerScreen() {
         let scannedImage = b64;
         if (result.corners) {
           try {
-            const debugPath = scanPhoto.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
-            generateDebugImage(b64, result.corners as [[number,number],[number,number],[number,number],[number,number]], result.answers, questions, choiceCount, debugPath);
+            const debugPath = scanPhoto.path.replace(/[^/]+$/, "debug_scan.jpg");
+            generateDebugImage(b64, result.corners as [[number,number],[number,number],[number,number],[number,number]], result.answers, qs, choiceCountRef.current, debugPath);
             const debugResult = await ImageManipulator.manipulateAsync(
               `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
             );
             if (debugResult.base64) scannedImage = debugResult.base64;
-          } catch (e) { console.warn('[debug-img] auto:', e); }
+          } catch (e) { console.warn("[debug-img] auto:", e); }
         }
 
-        // Update popup with enriched data (student name + debug image)
         setScanResult(prev => prev ? { ...prev, studentName, scannedImage } : prev);
-      } catch (e) { console.warn('[enrich] auto:', e); }
+      } catch (e) { console.warn("[enrich] auto:", e); }
     } catch (e) {
-      console.error('[scan] auto-detect error:', e);
-    } finally {
-      isDetectingRef.current = false;
-      // Chain: schedule next detection unless we're navigating to results
-      if (!navigating) {
-        detectLoopRef.current = setTimeout(runDetect, 50);
-      }
+      console.error("[scan] triggerScan error:", e);
+      isScanningRef.current = false;
     }
-  }, [questions, choiceCount, getFramePos]);
+  }, [getFramePos]);
 
   // Reset scan state and start live detection every time this screen is focused
   useFocusEffect(
     useCallback(() => {
       isScanningRef.current = false;
-      isDetectingRef.current = false;
       scanResultRef.current = false;
       waitForClearRef.current = false;
       setIsScanning(false);
@@ -343,18 +332,15 @@ export default function ScannerScreen() {
       setScanError(null);
       setScanResult(null);
       setWaitingForClear(false);
-      setCornersLocked([false, false, false, false]);
+      cornersLockedRef.current = [false, false, false, false]; setCornersLocked([false, false, false, false]);
       lastBarcodeRef.current = null;
       stableCountRef.current = 0;
       framePosRef.current = null; // re-measure on focus (in case layout shifted)
-      // Give camera ~800ms to warm up before first detection (avoids initial lag)
-      detectLoopRef.current = setTimeout(runDetect, 100);
+      // Frame processor handles detection automatically — no loop needed
       return () => {
-        if (detectLoopRef.current) clearTimeout(detectLoopRef.current);
-        detectLoopRef.current = null;
-        setCornersLocked([false, false, false, false]);
+        cornersLockedRef.current = [false, false, false, false]; setCornersLocked([false, false, false, false]);
       };
-    }, [runDetect])
+    }, [])
   );
 
   const scanLineY = useSharedValue(0);
@@ -408,12 +394,9 @@ export default function ScannerScreen() {
           );
         }
       );
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.4,
-        base64: false,
-        skipProcessing: true,
-      });
-      const base64 = await cropToFrame(photo.uri, photo.width, photo.height, framePos, 640, 0.4);
+      const photo = await cameraRef.current.takePhoto({ qualityPrioritization: "balanced" });
+      const photoUri = `file://${photo.path}`;
+      const base64 = await cropToFrame(photoUri, photo.width, photo.height, framePos, 640, 0.4);
       if (!base64) throw new Error("Image capture failed");
 
       const data = await scanSheet(base64, questions, choiceCount);
@@ -458,7 +441,7 @@ export default function ScannerScreen() {
         let scannedImage = base64;
         if (data.corners) {
           try {
-            const debugPath = photo.uri.replace(/[^/]+$/, 'debug_scan.jpg').replace(/^file:\/\//, '');
+            const debugPath = photo.path.replace(/[^/]+$/, 'debug_scan.jpg');
             generateDebugImage(base64, data.corners, data.answers, questions, choiceCount, debugPath);
             const debugResult = await ImageManipulator.manipulateAsync(
               `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
@@ -480,7 +463,7 @@ export default function ScannerScreen() {
     }
   }, [questions, choiceCount]);
 
-  // Dismiss popup → resume scanning
+  // Dismiss popup → resume scanning (frame processor auto-resumes)
   const handleScanNext = useCallback(() => {
     scanResultRef.current = false;
     waitForClearRef.current = false;
@@ -489,11 +472,9 @@ export default function ScannerScreen() {
     setScanError(null);
     isScanningRef.current = false;
     stableCountRef.current = 0;
-    setCornersLocked([false, false, false, false]);
+    cornersLockedRef.current = [false, false, false, false]; setCornersLocked([false, false, false, false]);
     lastBarcodeRef.current = null;
-    // Restart detection loop
-    detectLoopRef.current = setTimeout(runDetect, 100);
-  }, [runDetect]);
+  }, []);
 
   // Navigate to full results page
   const handleViewDetails = useCallback(() => {
@@ -553,7 +534,7 @@ export default function ScannerScreen() {
 
   return (
     <View style={styles.container}>
-      <CameraScanner ref={cameraRef} onBarcodeScanned={handleBarcodeScanned} />
+      <CameraScanner ref={cameraRef} onBarcodeScanned={handleBarcodeScanned} frameProcessor={frameProcessor} />
 
       <View style={[StyleSheet.absoluteFill, styles.overlay]} />
 
@@ -586,36 +567,47 @@ export default function ScannerScreen() {
             </Pressable>
           </View>
         </View>
-        <Text style={[styles.headerSub, cornersLocked.every(Boolean) && !waitingForClear && { color: Colors.success }]}>
-          {waitingForClear
-            ? "Remove sheet to scan next"
-            : cornersLocked.every(Boolean)
-              ? "All corners locked — scanning..."
-              : cornersLocked.some(Boolean)
-                ? `${cornersLocked.filter(Boolean).length}/4 corners aligned`
-                : "Point camera at the answer sheet"}
+        <Text style={[styles.headerSub,
+          scanError ? { color: Colors.error } :
+          cornersLocked.every(Boolean) && !waitingForClear ? { color: Colors.success } : undefined
+        ]}>
+          {scanError
+            ? scanError
+            : waitingForClear
+              ? "Remove sheet to scan next"
+              : cornersLocked.every(Boolean)
+                ? "All corners locked — scanning..."
+                : cornersLocked.some(Boolean)
+                  ? `${cornersLocked.filter(Boolean).length}/4 corners aligned`
+                  : "Point camera at the answer sheet"}
         </Text>
       </Animated.View>
 
       <View style={styles.frameContainer}>
         <View ref={frameRef} style={styles.frameWrapper}>
           <View style={styles.frame}>
-            {/* 4 corner target squares — at the edges like ZipGrade */}
-            {([
-              { top: 0, left: 0 },
-              { top: 0, left: FRAME_W - TARGET_SIZE },
-              { top: FRAME_H - TARGET_SIZE, left: 0 },
-              { top: FRAME_H - TARGET_SIZE, left: FRAME_W - TARGET_SIZE },
-            ] as const).map((pos, i) => (
-              <View
-                key={i}
-                style={[
-                  styles.targetBox,
-                  { top: pos.top, left: pos.left },
-                  cornersLocked[i] && styles.targetBoxDetected,
-                ]}
-              />
-            ))}
+            {/* Corner viewfinder boxes — turn green when that corner is detected */}
+            {([0,1,2,3] as const).map((i) => {
+              const isTop = i < 2;
+              const isLeft = i % 2 === 0;
+              return (
+                <View
+                  key={i}
+                  style={{
+                    position: "absolute",
+                    width: GUIDE_SIZE,
+                    height: GUIDE_SIZE,
+                    top: isTop ? GUIDE_INSET : undefined,
+                    bottom: !isTop ? GUIDE_INSET : undefined,
+                    left: isLeft ? GUIDE_INSET : undefined,
+                    right: !isLeft ? GUIDE_INSET : undefined,
+                    borderWidth: GUIDE_BORDER,
+                    borderColor: cornersLocked[i] ? Colors.success : "rgba(255,255,255,0.45)",
+                    borderRadius: GUIDE_RADIUS,
+                  }}
+                />
+              );
+            })}
 
             <Animated.View style={[styles.scanLine, scanLineStyle]} />
 
@@ -641,7 +633,7 @@ export default function ScannerScreen() {
         </View>
 
         <Animated.View entering={FadeInDown.duration(500).delay(200)}>
-          <Text style={styles.frameLabel}>Align paper corners with the 4 targets — scans automatically</Text>
+          <Text style={styles.frameLabel}>Point at the answer sheet — scans automatically</Text>
         </Animated.View>
       </View>
 
@@ -823,18 +815,6 @@ const styles = StyleSheet.create({
     width: FRAME_W,
     height: FRAME_H,
     position: "relative",
-  },
-  targetBox: {
-    position: "absolute",
-    width: TARGET_SIZE,
-    height: TARGET_SIZE,
-    borderWidth: 2.5,
-    borderRadius: 6,
-    borderColor: Colors.scanFrame,
-    zIndex: 10,
-  },
-  targetBoxDetected: {
-    borderColor: Colors.success,
   },
   scanLine: {
     position: "absolute",
