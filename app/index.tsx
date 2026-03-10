@@ -30,7 +30,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
-import { detectAndScan, scanSheet, generateDebugImage, warmupOpenCV } from "@/lib/scan-offline";
+import { detectAndScan, generateDebugImage, warmupOpenCV } from "@/lib/scan-offline";
 import { useFrameProcessor } from "react-native-vision-camera";
 import { useResizePlugin } from "vision-camera-resize-plugin";
 import { useRunOnJS } from "react-native-worklets-core";
@@ -252,7 +252,6 @@ export default function ScannerScreen() {
         isScanningShared.value = false;
         stableCountRef.current = 0;
         if ((result as any).blurry) {
-          setScanError("Image too blurry — hold steady");
           setTimeout(() => setScanError(null), 2000);
         }
         return;
@@ -268,6 +267,13 @@ export default function ScannerScreen() {
         setScanError("Place the sheet on a flat surface for accurate scanning");
         setTimeout(() => setScanError(null), 3000);
         return;
+      }
+
+      // Warn if some answers are unreadable
+      const unreadable = result.answers.filter(a => a === "?").length;
+      if (unreadable > 0) {
+        setScanError(`${unreadable} answer${unreadable > 1 ? "s" : ""} unreadable — check for unfilled bubbles or folded paper`);
+        setTimeout(() => setScanError(null), 4000);
       }
 
       // Success — show result popup
@@ -383,85 +389,6 @@ export default function ScannerScreen() {
 
 
   // Manual scan button fallback — takes a fresh high-quality photo
-  const handleScan = useCallback(async () => {
-    if (isScanningRef.current) return;
-    isScanningRef.current = true;
-    setScanError(null);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setIsScanning(true);
-
-    try {
-      if (!cameraRef.current) throw new Error("Camera not ready");
-
-      const photo = await cameraRef.current.takePhoto({ qualityPrioritization: "balanced" });
-      const photoUri = `file://${photo.path}`;
-      const base64 = await preparePhoto(photoUri, photo.width, photo.height, 640, 0.4);
-      if (!base64) throw new Error("Image capture failed");
-
-      const data = await scanSheet(base64, questions, choiceCount);
-      if (!data.answers) {
-        throw new Error("Fit the sheet inside the frame and try again");
-      }
-
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      waitForClearRef.current = true;
-      setWaitingForClear(true);
-
-      const score = data.answers.reduce(
-        (n, a, i) => n + (a === questions[i]?.correct ? 1 : 0), 0
-      );
-      const total = questions.length;
-
-      const barcode = lastBarcodeRef.current;
-
-      // Show popup immediately — don't wait for debug image or roster
-      scanResultRef.current = true;
-      setScanResult({
-        answers: data.answers,
-        score,
-        total,
-        percentage: total > 0 ? Math.round((score / total) * 100) : 0,
-        studentName: null,
-        studentId: barcode ?? null,
-        scannedImage: base64,
-      });
-
-      // Async: lookup student name + generate debug image, then update popup
-      try {
-        let studentName: string | null = null;
-        if (barcode) {
-          try {
-            const roster = await loadRoster();
-            const idx = Number(barcode);
-            if (roster.students[idx]) studentName = roster.students[idx];
-          } catch { /* no roster */ }
-        }
-
-        let scannedImage = base64;
-        if (data.corners) {
-          try {
-            const debugPath = photo.path.replace(/[^/]+$/, 'debug_scan.jpg');
-            generateDebugImage(base64, data.corners, data.answers, questions, choiceCount, debugPath);
-            const debugResult = await ImageManipulator.manipulateAsync(
-              `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
-            );
-            if (debugResult.base64) scannedImage = debugResult.base64;
-          } catch (e) { console.warn('[debug-img] manual:', e); }
-        }
-
-        setScanResult(prev => prev ? { ...prev, studentName, scannedImage } : prev);
-      } catch (e) { console.warn('[enrich] manual:', e); }
-    } catch (err: any) {
-      console.error("Scan failed:", err);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setScanError(err?.message ?? "Scan failed — try aligning the sheet.");
-    } finally {
-      isScanningRef.current = false;
-      setIsScanning(false);
-      setScanDone(false);
-    }
-  }, [questions, choiceCount]);
-
   // Dismiss popup → resume scanning (frame processor auto-resumes)
   const handleScanNext = useCallback(() => {
     scanResultRef.current = false;
@@ -636,65 +563,15 @@ export default function ScannerScreen() {
         </Animated.View>
       </View>
 
-      <Animated.View
-        entering={FadeInDown.duration(500).delay(300)}
-        style={[styles.bottomPanel, { paddingBottom: bottomPad + 16 }]}
-      >
-        {/* <View style={styles.answerKeyHeader}>
-          <Text style={styles.answerKeyTitle}>Answer Key</Text>
-          <View style={styles.answerKeyDot} />
-          <Text style={styles.answerKeyCount}>{questions.length} Questions</Text>
-        </View> */}
-
-        <View style={styles.answerKeyRow}>
-          {questions.map((q) => (
-            <View key={q.id} style={styles.answerKeyItem}>
-              <Text style={styles.answerKeyQNum}>Q{q.id}</Text>
-              <View style={styles.answerKeyBubble}>
-                <Text style={styles.answerKeyLetter}>{q.correct}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
-
-        {scanError && (
-          <View style={styles.errorRow}>
-            <Ionicons name="warning-outline" size={14} color={Colors.error} />
-            <Text style={styles.errorText}>{scanError}</Text>
-          </View>
-        )}
-
-        <Pressable
-          onPress={handleScan}
-          disabled={isScanning || questions.length === 0}
-          style={({ pressed }) => [
-            styles.scanBtn,
-            isScanning && styles.scanBtnScanning,
-            pressed && !isScanning && {
-              opacity: 0.9,
-              transform: [{ scale: 0.97 }],
-            },
-          ]}
+      {scanError && (
+        <Animated.View
+          entering={FadeInDown.duration(300)}
+          style={[styles.messageBar, { bottom: bottomPad + 24 }]}
         >
-          <MaterialCommunityIcons
-            name="line-scan"
-            size={20}
-            color={isScanning ? Colors.textSecondary : Colors.background}
-          />
-          <Text
-            style={[
-              styles.scanBtnText,
-              isScanning && { color: Colors.textSecondary },
-            ]}
-          >
-            {isScanning
-              ? scanDone
-                ? "Processing..."
-                : "Scanning..."
-              : "Scan Sheet"}
-          </Text>
-        </Pressable>
-      </Animated.View>
+          <Ionicons name="warning-outline" size={16} color={Colors.error} />
+          <Text style={styles.messageBarText}>{scanError}</Text>
+        </Animated.View>
+      )}
 
       {/* Scan result popup overlay */}
       {scanResult && (
@@ -945,6 +822,27 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     color: Colors.error,
     lineHeight: 16,
+  },
+  messageBar: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "rgba(30,0,0,0.85)",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: Colors.error,
+    zIndex: 20,
+  },
+  messageBarText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: Colors.error,
   },
   scanBtn: {
     backgroundColor: Colors.accent,

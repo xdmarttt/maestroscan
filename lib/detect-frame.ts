@@ -81,11 +81,13 @@ export function detectCornersFromFrame(
     ThresholdTypes.THRESH_BINARY_INV, bsz, 12,
   );
   {
+    const ksz1 = OpenCV.createObject(ObjectType.Size, 3, 3);
     const kernel = OpenCV.invoke(
       "getStructuringElement",
       MorphShapes.MORPH_RECT,
-      OpenCV.createObject(ObjectType.Size, 3, 3),
+      ksz1,
     );
+    OpenCV.releaseBuffers([ksz1.id]);
     OpenCV.invoke("morphologyEx", adaptBin, adaptBin, MorphTypes.MORPH_OPEN, kernel);
     const contours = OpenCV.createObject(ObjectType.MatVector);
     OpenCV.invoke(
@@ -122,11 +124,13 @@ export function detectCornersFromFrame(
   const fixedBin = OpenCV.createObject(ObjectType.Mat, 0, 0, DataTypes.CV_8UC1);
   OpenCV.invoke("threshold", blurred, fixedBin, 80, 255, ThresholdTypes.THRESH_BINARY_INV);
   {
+    const ksz2 = OpenCV.createObject(ObjectType.Size, 3, 3);
     const kernel = OpenCV.invoke(
       "getStructuringElement",
       MorphShapes.MORPH_RECT,
-      OpenCV.createObject(ObjectType.Size, 3, 3),
+      ksz2,
     );
+    OpenCV.releaseBuffers([ksz2.id]);
     OpenCV.invoke("morphologyEx", fixedBin, fixedBin, MorphTypes.MORPH_OPEN, kernel);
     const contours = OpenCV.createObject(ObjectType.MatVector);
     OpenCV.invoke(
