@@ -251,12 +251,24 @@ export default function ScannerScreen() {
         isScanningRef.current = false;
         isScanningShared.value = false;
         stableCountRef.current = 0;
+        if ((result as any).blurry) {
+          setScanError("Image too blurry — hold steady");
+          setTimeout(() => setScanError(null), 2000);
+        }
         return;
       }
 
-      // TODO: re-enable flat surface check later
-      // const missedCount = result.answers.filter(a => a === "?").length;
-      // if (missedCount > Math.max(2, questionsRef.current.length * 0.15)) { ... }
+      // Reject scan if too many unreadable answers — likely not flat
+      const missedCount = result.answers.filter(a => a === "?").length;
+      if (missedCount > Math.max(2, questionsRef.current.length * 0.15)) {
+        isScanningRef.current = false;
+        isScanningShared.value = false;
+        stableCountRef.current = 0;
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        setScanError("Place the sheet on a flat surface for accurate scanning");
+        setTimeout(() => setScanError(null), 3000);
+        return;
+      }
 
       // Success — show result popup
       const barcode = lastBarcodeRef.current;

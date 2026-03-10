@@ -597,6 +597,28 @@ export async function detectAndScan(
   OpenCV.releaseBuffers([bgrMat.id]);
 
   const { cols: W, rows: H, buffer: rawPixels } = OpenCV.matToBuffer(grayMat, "uint8");
+
+  // Blur check: compute gradient variance on pixel buffer (Laplacian-like)
+  // Sample every 4th pixel for speed — still accurate enough
+  let gradSum = 0, gradSumSq = 0, gradN = 0;
+  for (let y = 1; y < H - 1; y += 2) {
+    for (let x = 1; x < W - 1; x += 2) {
+      const idx = y * W + x;
+      const lap = rawPixels[idx] * 4
+        - rawPixels[idx - 1] - rawPixels[idx + 1]
+        - rawPixels[idx - W] - rawPixels[idx + W];
+      gradSum += lap;
+      gradSumSq += lap * lap;
+      gradN++;
+    }
+  }
+  const gradMean = gradSum / gradN;
+  const blurVariance = gradSumSq / gradN - gradMean * gradMean;
+  console.log(`[scan] blur variance: ${blurVariance.toFixed(1)}`);
+  if (blurVariance < 200) {
+    OpenCV.releaseBuffers([grayMat.id]);
+    return { found: false, blurry: true } as any;
+  }
   const markResult = findFourMarks(grayMat, rawPixels, W, H);
 
   if (!markResult.corners) {
