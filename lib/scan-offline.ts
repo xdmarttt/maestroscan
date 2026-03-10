@@ -144,11 +144,13 @@ function collectCandidatesFromBinary(
   existing: Candidate[],
 ): void {
   // Morph OPEN: break thin connections between marks and desk background
+  const kszCand = OpenCV.createObject(ObjectType.Size, 3, 3);
   const kernel = OpenCV.invoke(
     "getStructuringElement",
     MorphShapes.MORPH_RECT,
-    OpenCV.createObject(ObjectType.Size, 3, 3)
+    kszCand,
   );
+  OpenCV.releaseBuffers([kszCand.id]);
   OpenCV.invoke("morphologyEx", binary, binary, MorphTypes.MORPH_OPEN, kernel);
 
   const contours = OpenCV.createObject(ObjectType.MatVector);
@@ -702,7 +704,10 @@ export async function detectAndScan(
       const maxErr = Math.max(...errors);
       console.log(`[scan] fold reprojection error: ${maxErr.toFixed(1)}px (detected=${errors.length})`);
       // Flat paper: < 5px noise. Curved paper: > 15px typically.
-      if (errors.length >= 2 && maxErr > 10) {
+      // Two midpoints: 10px threshold (high confidence).
+      // One midpoint: 25px threshold (higher bar since single detection can be noisy).
+      const threshold = errors.length >= 2 ? 10 : 25;
+      if (maxErr > threshold) {
         return { found: false, folded: true } as any;
       }
     }
