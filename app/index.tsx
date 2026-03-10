@@ -42,42 +42,24 @@ const FRAME_W = SCREEN_WIDTH;
 const FRAME_H = Math.min(FRAME_W * 1.4, SCREEN_HEIGHT * 0.65);
 
 
-// Orient → crop to frame area → resize. Returns base64 JPEG or null.
-// Optimized: single ImageManipulator call using photo dimensions from camera.
-async function cropToFrame(
+// Orient to portrait + resize. Returns base64 JPEG or null.
+async function preparePhoto(
   photoUri: string,
   photoW: number,
   photoH: number,
-  framePos: { x: number; y: number; width: number; height: number },
   targetWidth: number,
   compress: number,
-  margin = 0.08,
 ): Promise<string | null> {
-  const allActions: ImageManipulator.Action[] = [];
-  let w = photoW;
-  let h = photoH;
-  if (w > h) {
-    allActions.push({ rotate: 90 });
-    [w, h] = [h, w];
-  }
-  const imgPxPerPt = Math.min(w / SCREEN_WIDTH, h / SCREEN_HEIGHT);
-  const coverOffX = Math.max(0, (w - SCREEN_WIDTH * imgPxPerPt) / 2);
-  const coverOffY = Math.max(0, (h - SCREEN_HEIGHT * imgPxPerPt) / 2);
-  const MARGIN = margin;
-  const ix0 = Math.round(Math.max(0, coverOffX + (framePos.x - framePos.width * MARGIN) * imgPxPerPt));
-  const iy0 = Math.round(Math.max(0, coverOffY + (framePos.y - framePos.height * MARGIN) * imgPxPerPt));
-  const ix1 = Math.round(Math.min(w, coverOffX + (framePos.x + framePos.width * (1 + MARGIN)) * imgPxPerPt));
-  const iy1 = Math.round(Math.min(h, coverOffY + (framePos.y + framePos.height * (1 + MARGIN)) * imgPxPerPt));
-  if (ix1 - ix0 <= 0 || iy1 - iy0 <= 0) return null;
-  allActions.push(
-    { crop: { originX: ix0, originY: iy0, width: ix1 - ix0, height: iy1 - iy0 } },
-    { resize: { width: targetWidth } },
-  );
+  const actions: ImageManipulator.Action[] = [];
+  // if (photoW > photoH) {
+  //   actions.push({ rotate: -90 });
+  // }
+  actions.push({ resize: { width: targetWidth } });
   const result = await ImageManipulator.manipulateAsync(
-    photoUri,
-    allActions,
+    photoUri, actions,
     { compress, format: ImageManipulator.SaveFormat.JPEG, base64: true },
   );
+  console.log(`[preparePhoto] output: ${result.width}x${result.height}`);
   return result.base64 ?? null;
 }
 
@@ -86,14 +68,6 @@ const GUIDE_SIZE = 100;
 const GUIDE_INSET = 8;
 const GUIDE_BORDER = 3.5;
 const GUIDE_RADIUS = 8;
-
-// Pre-computed guide box regions in frame-normalized coords (0-1)
-const GUIDE_BOXES = [
-  { x0: GUIDE_INSET / FRAME_W, y0: GUIDE_INSET / FRAME_H, x1: (GUIDE_INSET + GUIDE_SIZE) / FRAME_W, y1: (GUIDE_INSET + GUIDE_SIZE) / FRAME_H },
-  { x0: (FRAME_W - GUIDE_INSET - GUIDE_SIZE) / FRAME_W, y0: GUIDE_INSET / FRAME_H, x1: (FRAME_W - GUIDE_INSET) / FRAME_W, y1: (GUIDE_INSET + GUIDE_SIZE) / FRAME_H },
-  { x0: GUIDE_INSET / FRAME_W, y0: (FRAME_H - GUIDE_INSET - GUIDE_SIZE) / FRAME_H, x1: (GUIDE_INSET + GUIDE_SIZE) / FRAME_W, y1: (FRAME_H - GUIDE_INSET) / FRAME_H },
-  { x0: (FRAME_W - GUIDE_INSET - GUIDE_SIZE) / FRAME_W, y0: (FRAME_H - GUIDE_INSET - GUIDE_SIZE) / FRAME_H, x1: (FRAME_W - GUIDE_INSET) / FRAME_W, y1: (FRAME_H - GUIDE_INSET) / FRAME_H },
-];
 
 
 export default function ScannerScreen() {
@@ -124,7 +98,7 @@ export default function ScannerScreen() {
   const stableCountRef = useRef(0);
   const [waitingForClear, setWaitingForClear] = useState(false); // UI state for "remove sheet" message
   const waitForClearRef = useRef(false); // ref mirror for detection loop
-  const STABLE_THRESHOLD = 1; // scan on first frame with all corners locked
+  const STABLE_THRESHOLD = 2; // require 2 consecutive frames (~130ms) before scanning
 
   // Pre-load native OpenCV on mount to avoid lag on first detection frame
   useEffect(() => { warmupOpenCV(); }, []);
@@ -157,25 +131,43 @@ export default function ScannerScreen() {
 
   const { resize } = useResizePlugin();
   const lastDetectTime = useSharedValue(0);
+  const isScanningShared = useSharedValue(false); // worklet-accessible scanning flag
+
+  // Measure frame position after layout so guide box check works before first scan
+  useEffect(() => {
+    const timer = setTimeout(() => { getFramePos(); }, 300);
+    return () => clearTimeout(timer);
+  }, [getFramePos]);
+
+  // Debug: log detection results periodically
+  const debugCountRef = useRef(0);
 
   // Called from frame processor via runOnJS — handles guide box check + state updates
   const onDetectionResult = useCallback((partial: ([number, number] | null)[], found: boolean, W: number, H: number) => {
     if (scanResultRef.current || isScanningRef.current) return;
     if (questionsRef.current.length === 0) return;
 
-    // Detection ran on full camera frame (resized) — corners are in normalized coords
-    // Map to frame-relative positions for guide box check
+    // Debug log every 30 frames (~2sec)
+    const shouldLog = (++debugCountRef.current) % 30 === 0;
+    if (shouldLog) {
+      const detected = partial.filter(p => p !== null).length;
+      console.log(`[detect] ${detected}/4 corners found=${found} frame=${W}x${H} fp=${JSON.stringify(framePosRef.current)}`);
+      if (detected > 0) {
+        for (let i = 0; i < 4; i++) {
+          const pt = partial[i];
+          if (pt) console.log(`  corner${i}: cam=(${pt[0].toFixed(1)},${pt[1].toFixed(1)}) norm=(${(pt[0]/W).toFixed(3)},${(pt[1]/H).toFixed(3)})`);
+        }
+      }
+    }
+
+    // Per-corner feedback: each box turns green when its corner is detected.
+    // Auto-scan requires found=true (all 4 + geometry valid).
     const locked: [boolean, boolean, boolean, boolean] = [false, false, false, false];
     for (let i = 0; i < 4; i++) {
-      const pt = partial[i];
-      if (!pt) continue;
-      // Normalized position in the camera frame
-      const nx = pt[0] / W;
-      const ny = pt[1] / H;
-      const box = GUIDE_BOXES[i];
-      if (nx >= box.x0 && nx <= box.x1 && ny >= box.y0 && ny <= box.y1) {
-        locked[i] = true;
-      }
+      locked[i] = partial[i] !== null;
+    }
+    if (shouldLog) {
+      console.log(`  locked=[${locked}] found=${found}`);
     }
 
     // Update corners UI (only if changed)
@@ -214,12 +206,16 @@ export default function ScannerScreen() {
   // Frame processor — runs on every camera frame, does corner detection in ~5-15ms
   const frameProcessor = useFrameProcessor((frame) => {
     "worklet";
+    // Skip detection while scanning to avoid clearing OpenCV objects used by JS thread
+    if (isScanningShared.value) return;
     // Throttle to ~15fps
     const now = Date.now();
     if (now - lastDetectTime.value < 66) return;
     lastDetectTime.value = now;
 
-    const targetW = 200;
+    // Landscape frame gets rotated to portrait in detection.
+    // Target 320px wide → ~180px portrait width after rotation.
+    const targetW = 320;
     const targetH = Math.round(frame.height * (targetW / frame.width));
     const resized = resize(frame, {
       scale: { width: targetW, height: targetH },
@@ -229,42 +225,38 @@ export default function ScannerScreen() {
 
     const result = detectCornersFromFrame(resized, targetW, targetH, 3);
     onDetectionResultJS(result.partial, result.found, result.W, result.H);
-  }, [resize, lastDetectTime, onDetectionResultJS]);
+  }, [resize, lastDetectTime, isScanningShared, onDetectionResultJS]);
 
   // Scan capture — triggered when all 4 corners are stable (called from onDetectionResult)
   const triggerScan = useCallback(async () => {
     if (isScanningRef.current || !cameraRef.current) return;
     isScanningRef.current = true;
+    isScanningShared.value = true;
     stableCountRef.current = 0;
 
     try {
-      const framePos = await getFramePos();
-      if (!framePos) { isScanningRef.current = false; return; }
-
-      // VisionCamera takePhoto for high-quality capture
-      const scanPhoto = await cameraRef.current.takePhoto({ qualityPrioritization: "speed" });
+      const t0 = Date.now();
+      const scanPhoto = await cameraRef.current.takeSnapshot({ quality: 85 });
+      const t1 = Date.now();
       const photoUri = `file://${scanPhoto.path}`;
-      const b64 = await cropToFrame(photoUri, scanPhoto.width, scanPhoto.height, framePos, 480, 0.3);
-      if (!b64) { isScanningRef.current = false; stableCountRef.current = 0; return; }
+      const b64 = await preparePhoto(photoUri, scanPhoto.width, scanPhoto.height, 480, 0.5);
+      const t2 = Date.now();
+      if (!b64) { isScanningRef.current = false; isScanningShared.value = false; stableCountRef.current = 0; return; }
 
       const result = await detectAndScan(b64, questionsRef.current, choiceCountRef.current);
+      const t3 = Date.now();
+      console.log(`[scan] takePhoto=${t1-t0}ms prepare=${t2-t1}ms detect=${t3-t2}ms total=${t3-t0}ms`);
 
       if (!result.found) {
         isScanningRef.current = false;
+        isScanningShared.value = false;
         stableCountRef.current = 0;
         return;
       }
 
-      // Reject scan if too many unreadable answers — likely not flat
-      const missedCount = result.answers.filter(a => a === "?").length;
-      if (missedCount > Math.max(2, questionsRef.current.length * 0.15)) {
-        isScanningRef.current = false;
-        stableCountRef.current = 0;
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        setScanError("Place the sheet on a flat surface for accurate scanning");
-        setTimeout(() => setScanError(null), 3000);
-        return;
-      }
+      // TODO: re-enable flat surface check later
+      // const missedCount = result.answers.filter(a => a === "?").length;
+      // if (missedCount > Math.max(2, questionsRef.current.length * 0.15)) { ... }
 
       // Success — show result popup
       const barcode = lastBarcodeRef.current;
@@ -307,7 +299,7 @@ export default function ScannerScreen() {
             const debugPath = scanPhoto.path.replace(/[^/]+$/, "debug_scan.jpg");
             generateDebugImage(b64, result.corners as [[number,number],[number,number],[number,number],[number,number]], result.answers, qs, choiceCountRef.current, debugPath);
             const debugResult = await ImageManipulator.manipulateAsync(
-              `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.8 },
+              `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 },
             );
             if (debugResult.base64) scannedImage = debugResult.base64;
           } catch (e) { console.warn("[debug-img] auto:", e); }
@@ -318,13 +310,15 @@ export default function ScannerScreen() {
     } catch (e) {
       console.error("[scan] triggerScan error:", e);
       isScanningRef.current = false;
+      isScanningShared.value = false;
     }
-  }, [getFramePos]);
+  }, [getFramePos, isScanningShared]);
 
   // Reset scan state and start live detection every time this screen is focused
   useFocusEffect(
     useCallback(() => {
       isScanningRef.current = false;
+      isScanningShared.value = false;
       scanResultRef.current = false;
       waitForClearRef.current = false;
       setIsScanning(false);
@@ -336,6 +330,7 @@ export default function ScannerScreen() {
       lastBarcodeRef.current = null;
       stableCountRef.current = 0;
       framePosRef.current = null; // re-measure on focus (in case layout shifted)
+      setTimeout(() => { getFramePos(); }, 300);
       // Frame processor handles detection automatically — no loop needed
       return () => {
         cornersLockedRef.current = [false, false, false, false]; setCornersLocked([false, false, false, false]);
@@ -386,17 +381,9 @@ export default function ScannerScreen() {
     try {
       if (!cameraRef.current) throw new Error("Camera not ready");
 
-      const framePos = await new Promise<{ x: number; y: number; width: number; height: number }>(
-        (resolve, reject) => {
-          if (!frameRef.current) return reject(new Error("frame ref not ready"));
-          (frameRef.current as any).measureInWindow(
-            (x: number, y: number, w: number, h: number) => resolve({ x, y, width: w, height: h })
-          );
-        }
-      );
       const photo = await cameraRef.current.takePhoto({ qualityPrioritization: "balanced" });
       const photoUri = `file://${photo.path}`;
-      const base64 = await cropToFrame(photoUri, photo.width, photo.height, framePos, 640, 0.4);
+      const base64 = await preparePhoto(photoUri, photo.width, photo.height, 640, 0.4);
       if (!base64) throw new Error("Image capture failed");
 
       const data = await scanSheet(base64, questions, choiceCount);

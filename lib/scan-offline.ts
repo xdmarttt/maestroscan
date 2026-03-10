@@ -746,11 +746,9 @@ export function generateDebugImage(
       const center = OpenCV.createObject(ObjectType.Point, cx, cy);
 
       if (letter === detected) {
-        // Detected answer
         const isCorrect = detected === questions[q]?.correct;
         OpenCV.invoke("circle", colorMat, center, radius, isCorrect ? green : red, -1, LineTypes.LINE_8);
       } else {
-        // Unselected bubble
         OpenCV.invoke("circle", colorMat, center, radius, gray, 2, LineTypes.LINE_8);
       }
       OpenCV.releaseBuffers([center.id]);

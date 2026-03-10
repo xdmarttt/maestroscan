@@ -4,8 +4,8 @@
  * Worklet-compatible corner detection for VisionCamera frame processors.
  * Runs entirely on the frame processor thread — no JS thread roundtrip needed.
  *
- * This is a self-contained version of the corner detection from scan-offline.ts,
- * designed to work in a 'worklet' context with react-native-fast-opencv JSI calls.
+ * IMPORTANT: All logic must be inlined in a single worklet function.
+ * The worklet compiler cannot resolve cross-function calls.
  */
 
 import {
@@ -35,10 +35,7 @@ export interface DetectionResult {
  * Detect 4 corner registration marks from a resized camera frame buffer.
  * Called from within a VisionCamera frame processor (worklet context).
  *
- * @param frameBuffer - Raw pixel buffer from vision-camera-resize-plugin
- * @param width - Width of the resized frame
- * @param height - Height of the resized frame
- * @param channels - Number of channels (3 for BGR)
+ * All helpers are inlined — worklet runtime cannot resolve separate functions.
  */
 export function detectCornersFromFrame(
   frameBuffer: any,
@@ -48,16 +45,21 @@ export function detectCornersFromFrame(
 ): DetectionResult {
   "worklet";
 
-  const noResult: DetectionResult = { found: false, partial: [null, null, null, null], W: width, H: height };
-
   // Convert frame buffer → Mat → grayscale
   const src = OpenCV.frameBufferToMat(height, width, channels, frameBuffer);
-  const gray = OpenCV.createObject(ObjectType.Mat, 0, 0, DataTypes.CV_8U);
-  OpenCV.invoke("cvtColor", src, gray, ColorConversionCodes.COLOR_BGR2GRAY);
+  const grayRaw = OpenCV.createObject(ObjectType.Mat, 0, 0, DataTypes.CV_8U);
+  OpenCV.invoke("cvtColor", src, grayRaw, ColorConversionCodes.COLOR_BGR2GRAY);
   OpenCV.releaseBuffers([src.id]);
 
-  // Get pixel buffer for ringMean checks later
+  // Frame processor frames are always landscape (sensor orientation).
+  // Rotate 90° CW to portrait. Use const only — worklets don't support let reassignment.
+  const gray = OpenCV.createObject(ObjectType.Mat, 0, 0, DataTypes.CV_8U);
+  OpenCV.invoke("rotate", grayRaw, gray, 2); // 2 = ROTATE_90_COUNTERCLOCKWISE (iPhone rear cam)
+  OpenCV.releaseBuffers([grayRaw.id]);
+
+  // Get pixel buffer for ringMean checks later (now in portrait orientation)
   const { buffer: pixels, cols: W, rows: H } = OpenCV.matToBuffer(gray, "uint8");
+  const noResult: DetectionResult = { found: false, partial: [null, null, null, null], W, H };
 
   // Blur for noise reduction
   const blurred = OpenCV.createObject(ObjectType.Mat, 0, 0, DataTypes.CV_8U);
@@ -70,7 +72,7 @@ export function detectCornersFromFrame(
   const maxArea = (W * 0.15) ** 2;
   const candidates: { cx: number; cy: number; area: number }[] = [];
 
-  // Strategy 1: Adaptive threshold
+  // --- Inline collectCandidates for Strategy 1: Adaptive threshold ---
   const bsz = Math.max(15, Math.round(W * 0.10) | 1);
   const adaptBin = OpenCV.createObject(ObjectType.Mat, 0, 0, DataTypes.CV_8UC1);
   OpenCV.invoke(
@@ -78,13 +80,83 @@ export function detectCornersFromFrame(
     AdaptiveThresholdTypes.ADAPTIVE_THRESH_GAUSSIAN_C,
     ThresholdTypes.THRESH_BINARY_INV, bsz, 12,
   );
-  collectCandidates(adaptBin, minArea, maxArea, candidates);
+  {
+    const kernel = OpenCV.invoke(
+      "getStructuringElement",
+      MorphShapes.MORPH_RECT,
+      OpenCV.createObject(ObjectType.Size, 3, 3),
+    );
+    OpenCV.invoke("morphologyEx", adaptBin, adaptBin, MorphTypes.MORPH_OPEN, kernel);
+    const contours = OpenCV.createObject(ObjectType.MatVector);
+    OpenCV.invoke(
+      "findContours", adaptBin, contours,
+      RetrievalModes.RETR_EXTERNAL,
+      ContourApproximationModes.CHAIN_APPROX_SIMPLE,
+    );
+    const { array: contourInfos } = OpenCV.toJSValue(contours);
+    for (let i = 0; i < contourInfos.length; i++) {
+      const cnt = OpenCV.copyObjectFromVector(contours, i);
+      const { value: area } = OpenCV.invoke("contourArea", cnt);
+      if (area < minArea || area > maxArea) {
+        OpenCV.releaseBuffers([cnt.id]);
+        continue;
+      }
+      const rectHandle = OpenCV.invoke("boundingRect", cnt);
+      const { x, y, width: bw, height: bh } = OpenCV.toJSValue(rectHandle);
+      OpenCV.releaseBuffers([rectHandle.id, cnt.id]);
+      if (bw < 2 || bh < 2) continue;
+      if (Math.min(bw, bh) / Math.max(bw, bh) < 0.5) continue;
+      if (area / (bw * bh) < 0.65) continue;
+      const cx = x + bw / 2;
+      const cy = y + bh / 2;
+      const isDup = candidates.some(
+        (e) => Math.abs(e.cx - cx) < bw && Math.abs(e.cy - cy) < bh,
+      );
+      if (!isDup) candidates.push({ cx, cy, area });
+    }
+    OpenCV.releaseBuffers([kernel.id, contours.id]);
+  }
   OpenCV.releaseBuffers([adaptBin.id]);
 
-  // Strategy 2: Fixed low threshold
+  // --- Inline collectCandidates for Strategy 2: Fixed low threshold ---
   const fixedBin = OpenCV.createObject(ObjectType.Mat, 0, 0, DataTypes.CV_8UC1);
   OpenCV.invoke("threshold", blurred, fixedBin, 80, 255, ThresholdTypes.THRESH_BINARY_INV);
-  collectCandidates(fixedBin, minArea, maxArea, candidates);
+  {
+    const kernel = OpenCV.invoke(
+      "getStructuringElement",
+      MorphShapes.MORPH_RECT,
+      OpenCV.createObject(ObjectType.Size, 3, 3),
+    );
+    OpenCV.invoke("morphologyEx", fixedBin, fixedBin, MorphTypes.MORPH_OPEN, kernel);
+    const contours = OpenCV.createObject(ObjectType.MatVector);
+    OpenCV.invoke(
+      "findContours", fixedBin, contours,
+      RetrievalModes.RETR_EXTERNAL,
+      ContourApproximationModes.CHAIN_APPROX_SIMPLE,
+    );
+    const { array: contourInfos } = OpenCV.toJSValue(contours);
+    for (let i = 0; i < contourInfos.length; i++) {
+      const cnt = OpenCV.copyObjectFromVector(contours, i);
+      const { value: area } = OpenCV.invoke("contourArea", cnt);
+      if (area < minArea || area > maxArea) {
+        OpenCV.releaseBuffers([cnt.id]);
+        continue;
+      }
+      const rectHandle = OpenCV.invoke("boundingRect", cnt);
+      const { x, y, width: bw, height: bh } = OpenCV.toJSValue(rectHandle);
+      OpenCV.releaseBuffers([rectHandle.id, cnt.id]);
+      if (bw < 2 || bh < 2) continue;
+      if (Math.min(bw, bh) / Math.max(bw, bh) < 0.5) continue;
+      if (area / (bw * bh) < 0.65) continue;
+      const cx = x + bw / 2;
+      const cy = y + bh / 2;
+      const isDup = candidates.some(
+        (e) => Math.abs(e.cx - cx) < bw && Math.abs(e.cy - cy) < bh,
+      );
+      if (!isDup) candidates.push({ cx, cy, area });
+    }
+    OpenCV.releaseBuffers([kernel.id, contours.id]);
+  }
   OpenCV.releaseBuffers([fixedBin.id, blurred.id]);
 
   if (candidates.length < 4) {
@@ -93,7 +165,10 @@ export function detectCornersFromFrame(
   }
 
   // Filter small candidates (keep >= 40% of largest)
-  const maxCandArea = Math.max(...candidates.map((c) => c.area));
+  let maxCandArea = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    if (candidates[i].area > maxCandArea) maxCandArea = candidates[i].area;
+  }
   const filtered = candidates.filter((c) => c.area >= maxCandArea * 0.4);
   if (filtered.length < 4) {
     OpenCV.releaseBuffers([gray.id]);
@@ -111,6 +186,30 @@ export function detectCornersFromFrame(
   const partial: ([number, number] | null)[] = [];
   const cornerDarkness: number[] = [];
 
+  // Inline ringMean function
+  const ringMean = (px: Uint8Array, imgW: number, imgH: number, cx: number, cy: number, rInner: number, rOuter: number): number => {
+    const icx = Math.round(cx);
+    const icy = Math.round(cy);
+    const ro = Math.ceil(rOuter);
+    const riSq = rInner * rInner;
+    const roSq = rOuter * rOuter;
+    let sum = 0;
+    let count = 0;
+    for (let dy = -ro; dy <= ro; dy++) {
+      const py = icy + dy;
+      if (py < 0 || py >= imgH) continue;
+      for (let dx = -ro; dx <= ro; dx++) {
+        const px2 = icx + dx;
+        if (px2 < 0 || px2 >= imgW) continue;
+        const dSq = dx * dx + dy * dy;
+        if (dSq < riSq || dSq > roSq) continue;
+        sum += px[py * imgW + px2];
+        count++;
+      }
+    }
+    return count > 0 ? sum / count : 200;
+  };
+
   for (const { nx0, nx1, ny0, ny1 } of quads) {
     const inQ = filtered.filter(
       (c) => c.cx >= nx0 * W && c.cx < nx1 * W && c.cy >= ny0 * H && c.cy < ny1 * H,
@@ -118,12 +217,12 @@ export function detectCornersFromFrame(
     if (inQ.length === 0) { partial.push(null); cornerDarkness.push(999); continue; }
 
     const darkEnough = inQ.filter(
-      (c) => ringMeanWorklet(pixels, W, H, c.cx, c.cy, 0, 8) < 190,
+      (c) => ringMean(pixels, W, H, c.cx, c.cy, 0, 8) < 190,
     );
     if (darkEnough.length === 0) { partial.push(null); cornerDarkness.push(999); continue; }
 
     const best = darkEnough.reduce((a, b) => (b.area > a.area ? b : a));
-    const bestDark = ringMeanWorklet(pixels, W, H, best.cx, best.cy, 0, 8);
+    const bestDark = ringMean(pixels, W, H, best.cx, best.cy, 0, 8);
     partial.push([best.cx, best.cy]);
     cornerDarkness.push(bestDark);
   }
@@ -157,93 +256,12 @@ export function detectCornersFromFrame(
   if (topW / botW < 0.3 || topW / botW > 3.0) return { found: false, partial, W, H };
   if (leftH / rightH < 0.3 || leftH / rightH > 3.0) return { found: false, partial, W, H };
 
-  // Contrast check
+  // Contrast check — use small radius to sample white paper near center
   const centerX = (tl[0] + tr[0] + bl[0] + br[0]) / 4;
   const centerY = (tl[1] + tr[1] + bl[1] + br[1]) / 4;
-  const centerBright = ringMeanWorklet(pixels, W, H, centerX, centerY, 0, 16);
+  const centerBright = ringMean(pixels, W, H, centerX, centerY, 0, 6);
   const avgCornerDark = cornerDarkness.reduce((a, b) => a + b, 0) / 4;
-  if (centerBright - avgCornerDark < 25) return { found: false, partial, W, H };
+  if (centerBright - avgCornerDark < 15) return { found: false, partial, W, H };
 
   return { found: true, partial, W, H };
-}
-
-// --- Helpers (inlined for worklet compatibility) ---
-
-function ringMeanWorklet(
-  pixels: Uint8Array, W: number, H: number,
-  cx: number, cy: number, rInner: number, rOuter: number,
-): number {
-  "worklet";
-  const icx = Math.round(cx);
-  const icy = Math.round(cy);
-  const ro = Math.ceil(rOuter);
-  const riSq = rInner * rInner;
-  const roSq = rOuter * rOuter;
-  let sum = 0;
-  let count = 0;
-  for (let dy = -ro; dy <= ro; dy++) {
-    const py = icy + dy;
-    if (py < 0 || py >= H) continue;
-    for (let dx = -ro; dx <= ro; dx++) {
-      const px = icx + dx;
-      if (px < 0 || px >= W) continue;
-      const dSq = dx * dx + dy * dy;
-      if (dSq < riSq || dSq > roSq) continue;
-      sum += pixels[py * W + px];
-      count++;
-    }
-  }
-  return count > 0 ? sum / count : 200;
-}
-
-function collectCandidates(
-  binary: any, minArea: number, maxArea: number,
-  candidates: { cx: number; cy: number; area: number }[],
-): void {
-  "worklet";
-
-  // Morph OPEN: break thin connections
-  const kernel = OpenCV.invoke(
-    "getStructuringElement",
-    MorphShapes.MORPH_RECT,
-    OpenCV.createObject(ObjectType.Size, 3, 3),
-  );
-  OpenCV.invoke("morphologyEx", binary, binary, MorphTypes.MORPH_OPEN, kernel);
-
-  const contours = OpenCV.createObject(ObjectType.MatVector);
-  OpenCV.invoke(
-    "findContours", binary, contours,
-    RetrievalModes.RETR_EXTERNAL,
-    ContourApproximationModes.CHAIN_APPROX_SIMPLE,
-  );
-
-  const { array: contourInfos } = OpenCV.toJSValue(contours);
-  for (let i = 0; i < contourInfos.length; i++) {
-    const cnt = OpenCV.copyObjectFromVector(contours, i);
-    const { value: area } = OpenCV.invoke("contourArea", cnt);
-
-    if (area < minArea || area > maxArea) {
-      OpenCV.releaseBuffers([cnt.id]);
-      continue;
-    }
-
-    const rectHandle = OpenCV.invoke("boundingRect", cnt);
-    const { x, y, width: bw, height: bh } = OpenCV.toJSValue(rectHandle);
-    OpenCV.releaseBuffers([rectHandle.id, cnt.id]);
-
-    if (bw < 2 || bh < 2) continue;
-    if (Math.min(bw, bh) / Math.max(bw, bh) < 0.5) continue;
-    if (area / (bw * bh) < 0.65) continue;
-
-    const cx = x + bw / 2;
-    const cy = y + bh / 2;
-
-    // Dedup
-    const isDup = candidates.some(
-      (e) => Math.abs(e.cx - cx) < bw && Math.abs(e.cy - cy) < bh,
-    );
-    if (!isDup) candidates.push({ cx, cy, area });
-  }
-
-  OpenCV.releaseBuffers([kernel.id, contours.id]);
 }

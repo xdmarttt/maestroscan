@@ -45,6 +45,7 @@ const NativeCameraScanner = VC
             frameProcessor={frameProcessor}
             codeScanner={codeScanner}
             photo={true}
+            video={true}
             pixelFormat="yuv"
             outputOrientation="device"
           />
