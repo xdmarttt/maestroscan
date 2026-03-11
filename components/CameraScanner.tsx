@@ -37,16 +37,21 @@ const NativeCameraScanner = VC
 
         if (!device) return <View style={[StyleSheet.absoluteFill, styles.webBg]} />;
 
+        // frameProcessor and codeScanner each create an ImageAnalysis use case.
+        // Android limits total use cases (~3), so they must be mutually exclusive.
+        // When frameProcessor is active, we use takeSnapshot (needs video, not photo).
+        const useFrameProc = !!frameProcessor;
+
         return (
           <VC.Camera
             ref={ref}
             style={StyleSheet.absoluteFill}
             device={device}
             isActive={isActive}
-            frameProcessor={frameProcessor}
-            codeScanner={codeScanner}
-            photo={true}
-            video={true}
+            frameProcessor={useFrameProc ? frameProcessor : undefined}
+            codeScanner={useFrameProc ? undefined : codeScanner}
+            photo={!useFrameProc}
+            video={useFrameProc}
             zoom={zoom}
             pixelFormat="yuv"
             outputOrientation="device"
