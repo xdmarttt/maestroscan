@@ -928,7 +928,7 @@ export async function detectAndScan(
   // Search up to 30% of spacing — wide enough for perspective error, safe from adjacent bubbles
   const maxSafeSearch = Math.floor(minSpacingOrig / 2 - adjInnerR);
   const searchStep = Math.max(2, Math.min(maxSafeSearch, Math.round(minSpacingOrig * 0.30)));
-  console.log(`[scan] searchStep=${searchStep}px (spacing=${minSpacingOrig.toFixed(1)}px, safe=${maxSafeSearch}px)`);
+  console.log(`[scan] grid: ${layout.questionCount}Q x ${layout.choiceCount}C, ${layout.questionColumns}col, innerR=${adjInnerR} outerR=${adjOuterR1}-${adjOuterR2} searchStep=${searchStep}px (spacing=${minSpacingOrig.toFixed(1)}px)`);
   const answers: string[] = [];
   const confidence: number[] = [];
   for (let q = 0; q < layout.questionCount; q++) {
@@ -954,6 +954,10 @@ export async function detectAndScan(
       else if (ratios[i] > second) { second = ratios[i]; }
     }
     const gap = best - second;
+    // Log first 5 questions for diagnostics
+    if (q < 5) {
+      console.log(`[scan] Q${q + 1}: ratios=[${ratios.map(r => r.toFixed(3)).join(",")}] best=${best.toFixed(3)} 2nd=${second.toFixed(3)} gap=${gap.toFixed(3)}`);
+    }
     if (best >= layout.minRatio && second >= 0.15) {
       // Multiple bubbles filled → invalid (always wrong)
       answers.push("?");
