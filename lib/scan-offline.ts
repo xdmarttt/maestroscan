@@ -954,9 +954,13 @@ export async function detectAndScan(
       else if (ratios[i] > second) { second = ratios[i]; }
     }
     const gap = best - second;
-    // Log first 5 questions for diagnostics
-    if (q < 5) {
-      console.log(`[scan] Q${q + 1}: ratios=[${ratios.map(r => r.toFixed(3)).join(",")}] best=${best.toFixed(3)} 2nd=${second.toFixed(3)} gap=${gap.toFixed(3)}`);
+    // Log first 3 per column + any failures
+    const colIdx = Math.floor(q / layout.questionsPerColumn);
+    const rowIdx = q % layout.questionsPerColumn;
+    const isFailure = (best >= layout.minRatio && second >= 0.15) || best < layout.minRatio || gap < layout.minGap;
+    if (rowIdx < 3 || isFailure) {
+      const tag = (best >= layout.minRatio && second >= 0.15) ? "MULTI" : (best < layout.minRatio || gap < layout.minGap) ? "LOW" : "OK";
+      console.log(`[scan] Q${q + 1}(c${colIdx}): [${ratios.map(r => r.toFixed(3)).join(",")}] best=${best.toFixed(3)} 2nd=${second.toFixed(3)} ${tag}`);
     }
     if (best >= layout.minRatio && second >= 0.15) {
       // Multiple bubbles filled → invalid (always wrong)
