@@ -30,7 +30,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
-import { detectAndScan, generateDebugImage, warmupOpenCV } from "@/lib/scan-offline";
+import { detectAndScan, warmupOpenCV } from "@/lib/scan-offline";
 import { useFrameProcessor } from "react-native-vision-camera";
 import { useResizePlugin } from "vision-camera-resize-plugin";
 import { useRunOnJS } from "react-native-worklets-core";
@@ -104,7 +104,9 @@ export default function ScannerScreen() {
   const stableCountRef = useRef(0);
   const [waitingForClear, setWaitingForClear] = useState(false);
   const waitForClearRef = useRef(false);
+  const lastScanTimeRef = useRef(0);
   const STABLE_THRESHOLD = 2;
+  const SCAN_COOLDOWN_MS = 800; // minimum time between scans for native memory cleanup
 
   // Pre-load native OpenCV on mount to avoid lag on first detection frame
   useEffect(() => { warmupOpenCV(); }, []);
@@ -214,6 +216,10 @@ export default function ScannerScreen() {
 
   const triggerScan = useCallback(async () => {
     if (isScanningRef.current || !cameraRef.current) return;
+    // Cooldown: prevent rapid-fire scans that overwhelm native memory
+    const now = Date.now();
+    if (now - lastScanTimeRef.current < SCAN_COOLDOWN_MS) return;
+    lastScanTimeRef.current = now;
     isScanningRef.current = true;
     isScanningShared.value = true;
     stableCountRef.current = 0;
@@ -275,6 +281,7 @@ export default function ScannerScreen() {
       });
       setIsScanning(false);
 
+      // Enrich result with student name from roster (lightweight, no OpenCV)
       try {
         let studentName: string | null = null;
         if (barcode) {
@@ -284,20 +291,9 @@ export default function ScannerScreen() {
             if (roster.students[idx]) studentName = roster.students[idx];
           } catch { /* no roster */ }
         }
-
-        let scannedImage = b64;
-        if (result.corners) {
-          try {
-            const debugPath = scanPhoto.path.replace(/[^/]+$/, "debug_scan.jpg");
-            generateDebugImage(b64, result.corners as [[number,number],[number,number],[number,number],[number,number]], result.answers, qs, choiceCountRef.current, debugPath);
-            const debugResult = await ImageManipulator.manipulateAsync(
-              `file://${debugPath}`, [], { base64: true, format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 },
-            );
-            if (debugResult.base64) scannedImage = debugResult.base64;
-          } catch (e) { console.warn("[debug-img] auto:", e); }
+        if (studentName) {
+          setScanResult(prev => prev ? { ...prev, studentName } : prev);
         }
-
-        setScanResult(prev => prev ? { ...prev, studentName, scannedImage } : prev);
       } catch (e) { console.warn("[enrich] auto:", e); }
     } catch (e) {
       console.error("[scan] triggerScan error:", e);
@@ -392,6 +388,7 @@ export default function ScannerScreen() {
     setScanResult(null);
     setScanError(null);
     isScanningRef.current = false;
+    isScanningShared.value = false; // resume frame processor
     stableCountRef.current = 0;
     cornersLockedRef.current = [false, false, false, false]; setCornersLocked([false, false, false, false]);
     lastBarcodeRef.current = null;

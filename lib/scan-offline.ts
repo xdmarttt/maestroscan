@@ -820,7 +820,7 @@ export async function detectAndScan(
   const gradMean = gradSum / gradN;
   const blurVariance = gradSumSq / gradN - gradMean * gradMean;
   console.log(`[scan] blur variance: ${blurVariance.toFixed(1)}`);
-  if (blurVariance < 250) {
+  if (blurVariance < 150) {
     OpenCV.releaseBuffers([grayMat.id]);
     return { found: false, blurry: true } as any;
   }
