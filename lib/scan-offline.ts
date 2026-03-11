@@ -783,7 +783,11 @@ export async function detectAndScan(
       else if (ratios[i] > second) { second = ratios[i]; }
     }
     const gap = best - second;
-    if (best >= layout.minRatio && gap >= layout.minGap) {
+    if (best >= layout.minRatio && second >= 0.15) {
+      // Multiple bubbles filled → invalid (always wrong)
+      answers.push("?");
+      confidence.push(0);
+    } else if (best >= layout.minRatio && gap >= layout.minGap) {
       answers.push(layout.letters[bestIdx]);
       confidence.push(Math.min(1, gap / 0.4));
     } else {
