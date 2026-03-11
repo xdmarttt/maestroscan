@@ -9,6 +9,8 @@ import {
   Image,
   Modal,
   Dimensions,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,6 +30,8 @@ import * as Haptics from "expo-haptics";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
 import { loadRoster } from "@/lib/quiz-storage";
+import { useAuth } from "@/lib/auth-context";
+import { saveAnswerSheet } from "@/lib/queries";
 
 interface Question {
   id: number;
@@ -179,14 +183,18 @@ function QuestionResult({
 export default function ResultsScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams();
+  const { profile } = useAuth();
 
   const answers: string[] = JSON.parse((params.answers as string) || "[]");
   const questions: Question[] = JSON.parse((params.questions as string) || "[]");
   const studentIdParam = params.studentId as string | undefined;
   const studentId = studentIdParam ?? null;
   const scannedImage = (params.scannedImage as string) || null;
+  const quizId = (params.quizId as string) || null;
   const [studentName, setStudentName] = useState("");
   const [showImage, setShowImage] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   // Look up student name from roster by ID
   useEffect(() => {
@@ -202,6 +210,32 @@ export default function ResultsScreen() {
   }, [studentId]);
   const score = answers.filter((a, i) => a === questions[i]?.correct).length;
   const percentage = Math.round((score / questions.length) * 100);
+
+  const handleSaveToCloud = async () => {
+    if (!quizId || !studentId || !profile?.organization_id) {
+      Alert.alert("Cannot Save", "Missing quiz, student, or organization info. Ensure a barcode was scanned.");
+      return;
+    }
+    setSaving(true);
+    const answersMap: Record<string, string> = {};
+    answers.forEach((a, i) => { answersMap[String(i + 1)] = a; });
+    const { error } = await saveAnswerSheet({
+      quizId,
+      studentId,
+      organizationId: profile.organization_id,
+      answers: answersMap,
+      rawScore: score,
+      totalPoints: questions.length,
+      percentage,
+    });
+    setSaving(false);
+    if (error) {
+      Alert.alert("Save Failed", error);
+    } else {
+      setSaved(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+  };
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
@@ -303,6 +337,32 @@ export default function ResultsScreen() {
         {questions.map((q, i) => (
           <QuestionResult key={q.id} question={q} studentAnswer={answers[i] || "?"} index={i} />
         ))}
+
+        {quizId && (
+          <Animated.View entering={FadeInUp.duration(400).delay(500)} style={styles.scanAgainWrap}>
+            {saved ? (
+              <View style={styles.savedBanner}>
+                <Ionicons name="checkmark-circle" size={20} color={Colors.success} />
+                <Text style={styles.savedText}>Saved to MaestroGrade</Text>
+              </View>
+            ) : (
+              <Pressable
+                onPress={handleSaveToCloud}
+                disabled={saving}
+                style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.85 }, saving && { opacity: 0.6 }]}
+              >
+                {saving ? (
+                  <ActivityIndicator color={Colors.accent} size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="cloud-upload-outline" size={18} color={Colors.accent} />
+                    <Text style={styles.saveBtnText}>Save to Cloud</Text>
+                  </>
+                )}
+              </Pressable>
+            )}
+          </Animated.View>
+        )}
 
         <Animated.View entering={FadeInUp.duration(400).delay(600)} style={styles.scanAgainWrap}>
           <Pressable
@@ -613,6 +673,38 @@ const styles = StyleSheet.create({
   statusTagText: {
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
+  },
+  savedBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: Colors.successDim,
+    borderRadius: 16,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: Colors.success,
+  },
+  savedText: {
+    fontSize: 15,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.success,
+  },
+  saveBtn: {
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    paddingVertical: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: Colors.accent,
+  },
+  saveBtnText: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    color: Colors.accent,
   },
   scanAgainWrap: {
     marginTop: 6,

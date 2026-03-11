@@ -8,7 +8,7 @@ import {
   Dimensions,
   Alert,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
@@ -51,9 +51,6 @@ async function preparePhoto(
   compress: number,
 ): Promise<string | null> {
   const actions: ImageManipulator.Action[] = [];
-  // if (photoW > photoH) {
-  //   actions.push({ rotate: -90 });
-  // }
   actions.push({ resize: { width: targetWidth } });
   const result = await ImageManipulator.manipulateAsync(
     photoUri, actions,
@@ -71,6 +68,15 @@ const GUIDE_RADIUS = 8;
 
 
 export default function ScannerScreen() {
+  // Optional params from quiz detail screen
+  const params = useLocalSearchParams<{
+    quizId?: string;
+    answerKey?: string;
+    totalPoints?: string;
+    choiceCount?: string;
+    quizTitle?: string;
+  }>();
+
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [isScanning, setIsScanning] = useState(false);
@@ -96,9 +102,9 @@ export default function ScannerScreen() {
   const framePosRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const lastBarcodeRef = useRef<string | null>(null);
   const stableCountRef = useRef(0);
-  const [waitingForClear, setWaitingForClear] = useState(false); // UI state for "remove sheet" message
-  const waitForClearRef = useRef(false); // ref mirror for detection loop
-  const STABLE_THRESHOLD = 2; // require 2 consecutive frames (~130ms) before scanning
+  const [waitingForClear, setWaitingForClear] = useState(false);
+  const waitForClearRef = useRef(false);
+  const STABLE_THRESHOLD = 2;
 
   // Pre-load native OpenCV on mount to avoid lag on first detection frame
   useEffect(() => { warmupOpenCV(); }, []);
@@ -123,7 +129,7 @@ export default function ScannerScreen() {
     return pos;
   }, []);
 
-  // --- Frame processor detection (replaces setTimeout-based detection loop) ---
+  // --- Frame processor detection ---
   const questionsRef = useRef(questions);
   questionsRef.current = questions;
   const choiceCountRef = useRef(choiceCount);
@@ -131,46 +137,30 @@ export default function ScannerScreen() {
 
   const { resize } = useResizePlugin();
   const lastDetectTime = useSharedValue(0);
-  const isScanningShared = useSharedValue(false); // worklet-accessible scanning flag
+  const isScanningShared = useSharedValue(false);
 
-  // Measure frame position after layout so guide box check works before first scan
   useEffect(() => {
     const timer = setTimeout(() => { getFramePos(); }, 300);
     return () => clearTimeout(timer);
   }, [getFramePos]);
 
-  // Debug: log detection results periodically
   const debugCountRef = useRef(0);
 
-  // Called from frame processor via runOnJS — handles guide box check + state updates
   const onDetectionResult = useCallback((partial: ([number, number] | null)[], found: boolean, W: number, H: number) => {
     if (scanResultRef.current || isScanningRef.current) return;
     if (questionsRef.current.length === 0) return;
 
-    // Debug log every 30 frames (~2sec)
     const shouldLog = (++debugCountRef.current) % 30 === 0;
     if (shouldLog) {
       const detected = partial.filter(p => p !== null).length;
-      console.log(`[detect] ${detected}/4 corners found=${found} frame=${W}x${H} fp=${JSON.stringify(framePosRef.current)}`);
-      if (detected > 0) {
-        for (let i = 0; i < 4; i++) {
-          const pt = partial[i];
-          if (pt) console.log(`  corner${i}: cam=(${pt[0].toFixed(1)},${pt[1].toFixed(1)}) norm=(${(pt[0]/W).toFixed(3)},${(pt[1]/H).toFixed(3)})`);
-        }
-      }
+      console.log(`[detect] ${detected}/4 corners found=${found} frame=${W}x${H}`);
     }
 
-    // Per-corner feedback: each box turns green when its corner is detected.
-    // Auto-scan requires found=true (all 4 + geometry valid).
     const locked: [boolean, boolean, boolean, boolean] = [false, false, false, false];
     for (let i = 0; i < 4; i++) {
       locked[i] = partial[i] !== null;
     }
-    if (shouldLog) {
-      console.log(`  locked=[${locked}] found=${found}`);
-    }
 
-    // Update corners UI (only if changed)
     const prev = cornersLockedRef.current;
     if (prev[0] !== locked[0] || prev[1] !== locked[1] || prev[2] !== locked[2] || prev[3] !== locked[3]) {
       cornersLockedRef.current = locked;
@@ -179,7 +169,6 @@ export default function ScannerScreen() {
 
     const allLocked = locked.every(Boolean) && found;
 
-    // After a scan, wait for the sheet to be removed before re-scanning
     if (waitForClearRef.current) {
       if (!allLocked) {
         waitForClearRef.current = false;
@@ -200,21 +189,15 @@ export default function ScannerScreen() {
     }
   }, []);
 
-  // Run on JS callback wrapper for frame processor
   const onDetectionResultJS = useRunOnJS(onDetectionResult, [onDetectionResult]);
 
-  // Frame processor — runs on every camera frame, does corner detection in ~5-15ms
   const frameProcessor = useFrameProcessor((frame) => {
     "worklet";
-    // Skip detection while scanning to avoid clearing OpenCV objects used by JS thread
     if (isScanningShared.value) return;
-    // Throttle to ~15fps
     const now = Date.now();
     if (now - lastDetectTime.value < 66) return;
     lastDetectTime.value = now;
 
-    // Landscape frame gets rotated to portrait in detection.
-    // Target 320px wide → ~180px portrait width after rotation.
     const targetW = 320;
     const targetH = Math.round(frame.height * (targetW / frame.width));
     const resized = resize(frame, {
@@ -229,7 +212,6 @@ export default function ScannerScreen() {
     } catch {}
   }, [resize, lastDetectTime, isScanningShared, onDetectionResultJS]);
 
-  // Scan capture — triggered when all 4 corners are stable (called from onDetectionResult)
   const triggerScan = useCallback(async () => {
     if (isScanningRef.current || !cameraRef.current) return;
     isScanningRef.current = true;
@@ -263,14 +245,12 @@ export default function ScannerScreen() {
         return;
       }
 
-      // Info: note blank answers (could be intentionally left blank by student)
       const blankCount = result.answers.filter(a => a === "?").length;
       if (blankCount > 0) {
         setScanError(`${blankCount} blank/unreadable answer${blankCount > 1 ? "s" : ""} detected`);
         setTimeout(() => setScanError(null), 4000);
       }
 
-      // Success — show result popup
       const barcode = lastBarcodeRef.current;
       waitForClearRef.current = true;
       setWaitingForClear(true);
@@ -294,7 +274,6 @@ export default function ScannerScreen() {
       });
       setIsScanning(false);
 
-      // Async: lookup student name + generate debug image
       try {
         let studentName: string | null = null;
         if (barcode) {
@@ -326,7 +305,7 @@ export default function ScannerScreen() {
     }
   }, [getFramePos, isScanningShared]);
 
-  // Reset scan state and start live detection every time this screen is focused
+  // Reset scan state every time this screen is focused
   useFocusEffect(
     useCallback(() => {
       isScanningRef.current = false;
@@ -341,9 +320,8 @@ export default function ScannerScreen() {
       cornersLockedRef.current = [false, false, false, false]; setCornersLocked([false, false, false, false]);
       lastBarcodeRef.current = null;
       stableCountRef.current = 0;
-      framePosRef.current = null; // re-measure on focus (in case layout shifted)
+      framePosRef.current = null;
       setTimeout(() => { getFramePos(); }, 300);
-      // Frame processor handles detection automatically — no loop needed
       return () => {
         cornersLockedRef.current = [false, false, false, false]; setCornersLocked([false, false, false, false]);
       };
@@ -352,13 +330,40 @@ export default function ScannerScreen() {
 
   const scanLineY = useSharedValue(0);
 
+  // Load quiz config — from params (Supabase quiz) or AsyncStorage (offline)
   useFocusEffect(
     useCallback(() => {
-      loadQuiz().then((config) => {
-        setQuestions(config.questions);
-        setChoiceCount(config.choiceCount);
-      });
-    }, [])
+      if (params.answerKey && params.answerKey.length > 2) {
+        // Quiz mode: build QuizQuestion[] from Supabase answer key
+        try {
+          const keyObj = JSON.parse(params.answerKey) as Record<string, string>;
+          const cc = (Number(params.choiceCount) === 5 ? 5 : 4) as 4 | 5;
+          const choices = cc === 5 ? ["A", "B", "C", "D", "E"] : ["A", "B", "C", "D"];
+          const qs: QuizQuestion[] = Object.entries(keyObj)
+            .sort(([a], [b]) => Number(a) - Number(b))
+            .map(([num, correct], i) => ({
+              id: i + 1,
+              text: `Question ${num}`,
+              choices: choices.map((l) => `${l}. Answer ${l}`),
+              correct: correct as any,
+            }));
+          setQuestions(qs);
+          setChoiceCount(cc);
+        } catch (e) {
+          console.warn("[scan] Failed to parse quiz answer key, falling back to local:", e);
+          loadQuiz().then((config) => {
+            setQuestions(config.questions);
+            setChoiceCount(config.choiceCount);
+          });
+        }
+      } else {
+        // Offline mode: load from AsyncStorage
+        loadQuiz().then((config) => {
+          setQuestions(config.questions);
+          setChoiceCount(config.choiceCount);
+        });
+      }
+    }, [params.answerKey, params.choiceCount])
   );
 
   useEffect(() => {
@@ -372,8 +377,6 @@ export default function ScannerScreen() {
     );
   }, []);
 
-  // No auto-detect — user manually aligns the sheet to the corner brackets and taps Scan
-
   const scanLineStyle = useAnimatedStyle(() => ({
     transform: [
       { translateY: interpolate(scanLineY.value, [0, 1], [0, FRAME_H]) },
@@ -381,9 +384,6 @@ export default function ScannerScreen() {
     opacity: isScanning ? 1 : 0.5,
   }));
 
-
-  // Manual scan button fallback — takes a fresh high-quality photo
-  // Dismiss popup → resume scanning (frame processor auto-resumes)
   const handleScanNext = useCallback(() => {
     scanResultRef.current = false;
     waitForClearRef.current = false;
@@ -406,12 +406,13 @@ export default function ScannerScreen() {
         questions: JSON.stringify(questions),
         studentId: lastBarcodeRef.current ?? "",
         scannedImage: scanResult.scannedImage,
+        quizId: params.quizId ?? "",
       },
     });
     scanResultRef.current = false;
     setScanResult(null);
     isScanningRef.current = false;
-  }, [scanResult, questions]);
+  }, [scanResult, questions, params.quizId]);
 
   const getScoreColor = (pct: number) => {
     if (pct >= 80) return Colors.success;
@@ -421,6 +422,8 @@ export default function ScannerScreen() {
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
+
+  const headerTitle = params.quizTitle ?? "GradeSnap";
 
   if (!permission) {
     return (
@@ -464,27 +467,37 @@ export default function ScannerScreen() {
       >
         <View style={styles.headerRow}>
           <View style={styles.logoRow}>
-            <MaterialCommunityIcons name="scan-helper" size={22} color={Colors.accent} />
-            <Text style={styles.appName}>GradeSnap</Text>
+            {params.quizId ? (
+              <Pressable onPress={() => router.back()} style={{ padding: 4 }}>
+                <Ionicons name="arrow-back" size={22} color={Colors.textPrimary} />
+              </Pressable>
+            ) : (
+              <MaterialCommunityIcons name="scan-helper" size={22} color={Colors.accent} />
+            )}
+            <Text style={styles.appName} numberOfLines={1}>{headerTitle}</Text>
           </View>
           <View style={styles.headerActions}>
-            <Pressable
-              onPress={() => router.push("/setup")}
-              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-            >
-              <Ionicons name="settings-outline" size={20} color={Colors.textSecondary} />
-            </Pressable>
-            <Pressable
-              onPress={() =>
-                router.push({
-                  pathname: "/sheet",
-                  params: { questions: JSON.stringify(questions), choiceCount: String(choiceCount) },
-                })
-              }
-              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
-            >
-              <Ionicons name="document-outline" size={20} color={Colors.textSecondary} />
-            </Pressable>
+            {!params.quizId && (
+              <>
+                <Pressable
+                  onPress={() => router.push("/setup")}
+                  style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+                >
+                  <Ionicons name="settings-outline" size={20} color={Colors.textSecondary} />
+                </Pressable>
+                <Pressable
+                  onPress={() =>
+                    router.push({
+                      pathname: "/sheet",
+                      params: { questions: JSON.stringify(questions), choiceCount: String(choiceCount) },
+                    })
+                  }
+                  style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+                >
+                  <Ionicons name="document-outline" size={20} color={Colors.textSecondary} />
+                </Pressable>
+              </>
+            )}
           </View>
         </View>
         <Text style={[styles.headerSub,
@@ -506,7 +519,6 @@ export default function ScannerScreen() {
       <View style={styles.frameContainer}>
         <View ref={frameRef} style={styles.frameWrapper}>
           <View style={styles.frame}>
-            {/* Corner viewfinder boxes — turn green when that corner is detected */}
             {([0,1,2,3] as const).map((i) => {
               const isTop = i < 2;
               const isLeft = i % 2 === 0;
@@ -647,12 +659,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    flex: 1,
   },
   appName: {
     fontSize: 20,
     fontFamily: "Inter_700Bold",
     color: Colors.textPrimary,
     letterSpacing: -0.3,
+    flex: 1,
   },
   headerActions: {
     flexDirection: "row",
@@ -730,93 +744,6 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     letterSpacing: 0.3,
   },
-  bottomPanel: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingTop: 20,
-    paddingHorizontal: 24,
-    paddingBottom: 20,
-    gap: 16,
-    zIndex: 10,
-    borderTopWidth: 1,
-    borderColor: Colors.border,
-  },
-  answerKeyHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  answerKeyTitle: {
-    fontSize: 13,
-    fontFamily: "Inter_600SemiBold",
-    color: Colors.textSecondary,
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  answerKeyDot: {
-    width: 3,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: Colors.textMuted,
-  },
-  answerKeyCount: {
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
-  },
-  answerKeyRow: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  answerKeyItem: {
-    flex: 1,
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: Colors.surfaceElevated,
-    borderRadius: 14,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  answerKeyQNum: {
-    fontSize: 10,
-    fontFamily: "Inter_500Medium",
-    color: Colors.textMuted,
-    letterSpacing: 0.5,
-  },
-  answerKeyBubble: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: Colors.accentDim,
-    borderWidth: 1.5,
-    borderColor: Colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  answerKeyLetter: {
-    fontSize: 14,
-    fontFamily: "Inter_700Bold",
-    color: Colors.accent,
-  },
-  errorRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 6,
-    backgroundColor: Colors.errorDim,
-    borderRadius: 10,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: Colors.error,
-  },
-  errorText: {
-    flex: 1,
-    fontSize: 12,
-    fontFamily: "Inter_400Regular",
-    color: Colors.error,
-    lineHeight: 16,
-  },
   messageBar: {
     position: "absolute",
     left: 20,
@@ -837,31 +764,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Inter_500Medium",
     color: Colors.error,
-  },
-  scanBtn: {
-    backgroundColor: Colors.accent,
-    borderRadius: 16,
-    paddingVertical: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    shadowColor: Colors.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 16,
-    shadowOpacity: 0.4,
-    elevation: 8,
-  },
-  scanBtnScanning: {
-    backgroundColor: Colors.surfaceElevated,
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  scanBtnText: {
-    fontSize: 16,
-    fontFamily: "Inter_700Bold",
-    color: Colors.background,
-    letterSpacing: -0.2,
   },
   permissionContainer: {
     flex: 1,
