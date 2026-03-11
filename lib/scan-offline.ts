@@ -672,45 +672,49 @@ export async function detectAndScan(
   // On FLAT paper all 6 marks are coplanar → residual ≈ 0 (only detection jitter).
   // On CURVED paper midpoints leave the plane → large residual.
   // This cancels perspective, rotation, and scale — only measures actual curvature.
-  if (markResult.midpoints) {
-    const [leftMid, rightMid] = markResult.midpoints;
+  try {
+    if (markResult.midpoints) {
+      const [leftMid, rightMid] = markResult.midpoints;
 
-    // Ideal midpoint positions in warped space (center of left/right edges)
-    const idealLM: [number, number] = [
-      (IDEAL_CORNERS[0][0] + IDEAL_CORNERS[2][0]) / 2,
-      (IDEAL_CORNERS[0][1] + IDEAL_CORNERS[2][1]) / 2,
-    ];
-    const idealRM: [number, number] = [
-      (IDEAL_CORNERS[1][0] + IDEAL_CORNERS[3][0]) / 2,
-      (IDEAL_CORNERS[1][1] + IDEAL_CORNERS[3][1]) / 2,
-    ];
+      // Ideal midpoint positions in warped space (center of left/right edges)
+      const idealLM: [number, number] = [
+        (IDEAL_CORNERS[0][0] + IDEAL_CORNERS[2][0]) / 2,
+        (IDEAL_CORNERS[0][1] + IDEAL_CORNERS[2][1]) / 2,
+      ];
+      const idealRM: [number, number] = [
+        (IDEAL_CORNERS[1][0] + IDEAL_CORNERS[3][0]) / 2,
+        (IDEAL_CORNERS[1][1] + IDEAL_CORNERS[3][1]) / 2,
+      ];
 
-    // Forward perspective: detected image coords → ideal warped coords
-    const detFlat = corners.flatMap(([x, y]: [number, number]) => [x, y]);
-    const idlFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
-    const fwdPersp = PerspT(detFlat, idlFlat);
+      // Forward perspective: detected image coords → ideal warped coords
+      const detFlat = corners.flatMap(([x, y]: [number, number]) => [x, y]);
+      const idlFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
+      const fwdPersp = PerspT(detFlat, idlFlat);
 
-    const errors: number[] = [];
-    if (leftMid) {
-      const [px, py] = fwdPersp.transform(leftMid[0], leftMid[1]);
-      errors.push(Math.sqrt((px - idealLM[0]) ** 2 + (py - idealLM[1]) ** 2));
-    }
-    if (rightMid) {
-      const [px, py] = fwdPersp.transform(rightMid[0], rightMid[1]);
-      errors.push(Math.sqrt((px - idealRM[0]) ** 2 + (py - idealRM[1]) ** 2));
-    }
+      const errors: number[] = [];
+      if (leftMid) {
+        const [px, py] = fwdPersp.transform(leftMid[0], leftMid[1]);
+        errors.push(Math.sqrt((px - idealLM[0]) ** 2 + (py - idealLM[1]) ** 2));
+      }
+      if (rightMid) {
+        const [px, py] = fwdPersp.transform(rightMid[0], rightMid[1]);
+        errors.push(Math.sqrt((px - idealRM[0]) ** 2 + (py - idealRM[1]) ** 2));
+      }
 
-    if (errors.length > 0) {
-      const maxErr = Math.max(...errors);
-      console.log(`[scan] fold reprojection error: ${maxErr.toFixed(1)}px (detected=${errors.length})`);
-      // Flat paper: < 5px noise. Curved paper: > 15px typically.
-      // Two midpoints: 10px threshold (high confidence).
-      // One midpoint: 25px threshold (higher bar since single detection can be noisy).
-      const threshold = errors.length >= 2 ? 10 : 25;
-      if (maxErr > threshold) {
-        return { found: false, folded: true } as any;
+      if (errors.length > 0) {
+        const maxErr = Math.max(...errors);
+        console.log(`[scan] fold reprojection error: ${maxErr.toFixed(1)}px (detected=${errors.length})`);
+        // Flat paper: < 5px noise. Curved paper: > 15px typically.
+        // Two midpoints: 10px threshold (high confidence).
+        // One midpoint: 25px threshold (higher bar since single detection can be noisy).
+        const threshold = errors.length >= 2 ? 10 : 25;
+        if (maxErr > threshold) {
+          return { found: false, folded: true } as any;
+        }
       }
     }
+  } catch (e) {
+    console.warn("[scan] fold check error:", e);
   }
 
 

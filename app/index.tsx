@@ -223,8 +223,10 @@ export default function ScannerScreen() {
       dataType: "uint8",
     });
 
-    const result = detectCornersFromFrame(resized, targetW, targetH, 3);
-    onDetectionResultJS(result.partial, result.found, result.W, result.H);
+    try {
+      const result = detectCornersFromFrame(resized, targetW, targetH, 3);
+      onDetectionResultJS(result.partial, result.found, result.W, result.H);
+    } catch {}
   }, [resize, lastDetectTime, isScanningShared, onDetectionResultJS]);
 
   // Scan capture — triggered when all 4 corners are stable (called from onDetectionResult)
