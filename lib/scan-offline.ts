@@ -910,24 +910,36 @@ export async function detectAndScan(
   const idealW = IDEAL_CORNERS[1][0] - IDEAL_CORNERS[0][0];
   const idealH = IDEAL_CORNERS[2][1] - IDEAL_CORNERS[0][1];
   const radiusScale = Math.min(rectW / idealW, rectH / idealH);
-  const adjInnerR = Math.max(3, Math.round(layout.innerR * radiusScale));
-  const adjOuterR1 = Math.max(adjInnerR + 1, Math.round(layout.outerR1 * radiusScale));
-  const adjOuterR2 = Math.max(adjOuterR1 + 1, Math.round(layout.outerR2 * radiusScale));
 
-  // Sample answer bubbles via PerspT on original pixels.
-  // Search a neighborhood around each mapped position to find the actual
-  // bubble center — compensates for lens distortion & perspective error
-  // (worst at sheet center, farthest from all 4 registration marks).
-  // Compute spacing in original image pixels to size the search safely.
+  // Compute bubble spacing in original image pixels (needed for ring safety cap)
   const p00 = layout.bubbleCenter(0, 0);
   const p10 = layout.bubbleCenter(Math.min(1, layout.questionCount - 1), 0);
   const p01 = layout.bubbleCenter(0, Math.min(1, layout.choiceCount - 1));
   const vSpacingOrig = Math.abs(p10.ny - p00.ny) * WARP_H * radiusScale;
   const hSpacingOrig = Math.abs(p01.nx - p00.nx) * WARP_W * radiusScale;
   const minSpacingOrig = Math.min(hSpacingOrig, vSpacingOrig) || 20;
-  // Search up to 30% of spacing — wide enough for perspective error, safe from adjacent bubbles
+
+  // Sampling radii: ensure outer ring has ≥2px width, cap at safe distance from neighbors
+  const adjInnerR = Math.max(3, Math.round(layout.innerR * radiusScale));
+  const maxSafeR = Math.floor(minSpacingOrig * 0.45);
+  let adjOuterR1 = Math.round(layout.outerR1 * radiusScale);
+  let adjOuterR2 = Math.round(layout.outerR2 * radiusScale);
+  adjOuterR1 = Math.max(adjInnerR + 2, adjOuterR1);
+  adjOuterR2 = Math.max(adjOuterR1 + 2, adjOuterR2);
+  // Cap outer ring at safe distance from neighbor bubbles
+  if (adjOuterR2 > maxSafeR) {
+    adjOuterR2 = maxSafeR;
+    adjOuterR1 = Math.min(adjOuterR1, adjOuterR2 - 1);
+  }
+  // Absolute fallback: ensure valid ring
+  if (adjOuterR1 <= adjInnerR) {
+    adjOuterR1 = adjInnerR + 1;
+    adjOuterR2 = Math.max(adjOuterR1 + 1, adjOuterR2);
+  }
+
+  // Search neighborhood: 25% of spacing to compensate for lens distortion
   const maxSafeSearch = Math.floor(minSpacingOrig / 2 - adjInnerR);
-  const searchStep = Math.max(2, Math.min(maxSafeSearch, Math.round(minSpacingOrig * 0.30)));
+  const searchStep = Math.max(2, Math.min(maxSafeSearch, Math.round(minSpacingOrig * 0.25)));
   console.log(`[scan] grid: ${layout.questionCount}Q x ${layout.choiceCount}C, ${layout.questionColumns}col, innerR=${adjInnerR} outerR=${adjOuterR1}-${adjOuterR2} searchStep=${searchStep}px (spacing=${minSpacingOrig.toFixed(1)}px)`);
   const answers: string[] = [];
   const confidence: number[] = [];
@@ -954,16 +966,8 @@ export async function detectAndScan(
       else if (ratios[i] > second) { second = ratios[i]; }
     }
     const gap = best - second;
-    // Log first 3 per column + any failures
-    const colIdx = Math.floor(q / layout.questionsPerColumn);
-    const rowIdx = q % layout.questionsPerColumn;
-    const isFailure = (best >= layout.minRatio && second >= 0.15) || best < layout.minRatio || gap < layout.minGap;
-    if (rowIdx < 3 || isFailure) {
-      const tag = (best >= layout.minRatio && second >= 0.15) ? "MULTI" : (best < layout.minRatio || gap < layout.minGap) ? "LOW" : "OK";
-      console.log(`[scan] Q${q + 1}(c${colIdx}): [${ratios.map(r => r.toFixed(3)).join(",")}] best=${best.toFixed(3)} 2nd=${second.toFixed(3)} ${tag}`);
-    }
-    if (best >= layout.minRatio && second >= 0.15) {
-      // Multiple bubbles filled → invalid (always wrong)
+    if (best >= layout.minRatio && second >= 0.20 && gap < 0.15) {
+      // Multiple bubbles filled — both high ratio with small gap
       answers.push("?");
       confidence.push(0);
     } else if (best >= layout.minRatio && gap >= layout.minGap) {

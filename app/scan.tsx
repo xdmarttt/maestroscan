@@ -223,7 +223,7 @@ export default function ScannerScreen() {
       const scanPhoto = await cameraRef.current.takeSnapshot({ quality: 85 });
       const t1 = Date.now();
       const photoUri = `file://${scanPhoto.path}`;
-      const b64 = await preparePhoto(photoUri, scanPhoto.width, scanPhoto.height, 480, 0.5);
+      const b64 = await preparePhoto(photoUri, scanPhoto.width, scanPhoto.height, 560, 0.7);
       const t2 = Date.now();
       if (!b64) { isScanningRef.current = false; isScanningShared.value = false; stableCountRef.current = 0; return; }
 
