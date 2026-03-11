@@ -13,6 +13,7 @@
 import PerspT from "perspective-transform";
 import type { QuizQuestion } from "./quiz-storage";
 import { computeGridLayout, WARP_W as GRID_WARP_W, WARP_H as GRID_WARP_H } from "./grid-layout";
+import { decodeCode128B } from "./barcode";
 
 // Lazy-load native OpenCV — fails gracefully in Expo Go
 let OpenCV: any = null;
@@ -421,16 +422,182 @@ function findFourMarks(
 
 // ── Student ID barcode reading ───────────────────────────────────────────────
 
+// Barcode region on the sheet (normalized 0-1 coordinates)
+const BARCODE_X0 = 0.18;
+const BARCODE_X1 = 0.82;
+const BARCODE_SCAN_LINES = [0.888, 0.893, 0.898, 0.903, 0.908];
+const BARCODE_SAMPLES = 500; // horizontal sample points per scan line
+
 /**
  * Read student ID from a Code 128B barcode at the bottom of the sheet.
  * Samples multiple horizontal scan lines across the barcode region via PerspT,
  * averages them for noise reduction, then decodes the bar pattern.
- * Returns student number (0–99) or null if unreadable.
+ * Returns decoded string or null if unreadable.
  */
-/**
- * Binarize profile at given threshold, run-length encode, filter noise, decode.
- * Returns decoded number or null.
- */
+function binarizeAdaptive(profile: Float64Array, window: number): number[] | null {
+  const N = profile.length;
+  const half = Math.floor(window / 2);
+
+  // Compute prefix sums for O(1) local average
+  const prefix = new Float64Array(N + 1);
+  for (let i = 0; i < N; i++) prefix[i + 1] = prefix[i] + profile[i];
+
+  // Binarize: bar (1) if below local average, space (0) if above
+  const binary = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const lo = Math.max(0, i - half);
+    const hi = Math.min(N - 1, i + half);
+    const localAvg = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1);
+    binary[i] = profile[i] < localAvg ? 1 : 0;
+  }
+
+  // Skip leading quiet zone (spaces)
+  let start = 0;
+  while (start < N && binary[start] === 0) start++;
+  if (start >= N) return null;
+
+  // Run-length encode from first bar
+  const runs: number[] = [];
+  let cur = 1; // 1 = bar
+  let len = 1;
+  for (let i = start + 1; i < N; i++) {
+    if (binary[i] === cur) {
+      len++;
+    } else {
+      runs.push(len);
+      cur = binary[i];
+      len = 1;
+    }
+  }
+  runs.push(len);
+  // Trim trailing space (quiet zone)
+  if (runs.length > 0 && runs.length % 2 === 0) runs.pop();
+  return runs;
+}
+
+function binarizeGlobal(profile: Float64Array, thresh: number): number[] | null {
+  const N = profile.length;
+  let start = 0;
+  while (start < N && profile[start] >= thresh) start++;
+  if (start >= N) return null;
+
+  const runs: number[] = [];
+  let isBar = true;
+  let runLen = 1;
+  for (let i = start + 1; i < N; i++) {
+    const curBar = profile[i] < thresh;
+    if (curBar === isBar) {
+      runLen++;
+    } else {
+      runs.push(runLen);
+      isBar = curBar;
+      runLen = 1;
+    }
+  }
+  runs.push(runLen);
+  if (runs.length > 0 && runs.length % 2 === 0) runs.pop();
+  return runs;
+}
+
+function tryDecodeRuns(runs: number[]): string | null {
+  if (!runs || runs.length < 19) return null;
+  // Try with and without trimming trailing noise
+  for (let trim = 0; trim <= 4; trim += 2) {
+    const trimmed = trim === 0 ? runs : runs.slice(0, runs.length - trim);
+    if (trimmed.length < 19) break;
+    const decoded = decodeCode128B(trimmed);
+    if (decoded) return decoded;
+  }
+  return null;
+}
+
+function readStudentId(
+  pixels: Uint8Array,
+  W: number,
+  H: number,
+  corners: [number, number][],
+): string | null {
+  try {
+    const idealFlat = IDEAL_CORNERS.flatMap(([x, y]) => [x, y]);
+    const detectedFlat = corners.flatMap(([x, y]: [number, number]) => [x, y]);
+    const invPersp = PerspT(idealFlat, detectedFlat);
+
+    // Sample multiple horizontal scan lines across the barcode region and average
+    const rawProfile = new Float64Array(BARCODE_SAMPLES);
+    let oobCount = 0;
+    for (const ny of BARCODE_SCAN_LINES) {
+      for (let s = 0; s < BARCODE_SAMPLES; s++) {
+        const nx = BARCODE_X0 + (s / (BARCODE_SAMPLES - 1)) * (BARCODE_X1 - BARCODE_X0);
+        const [ix, iy] = invPersp.transform(nx * WARP_W, ny * WARP_H);
+        const px = Math.round(ix);
+        const py = Math.round(iy);
+        if (px >= 0 && px < W && py >= 0 && py < H) {
+          rawProfile[s] += pixels[py * W + px];
+        } else {
+          rawProfile[s] += 200;
+          oobCount++;
+        }
+      }
+    }
+    for (let i = 0; i < BARCODE_SAMPLES; i++) {
+      rawProfile[i] /= BARCODE_SCAN_LINES.length;
+    }
+
+    // Smooth with 3-sample moving average
+    const profile = new Float64Array(BARCODE_SAMPLES);
+    profile[0] = rawProfile[0];
+    profile[BARCODE_SAMPLES - 1] = rawProfile[BARCODE_SAMPLES - 1];
+    for (let i = 1; i < BARCODE_SAMPLES - 1; i++) {
+      profile[i] = (rawProfile[i - 1] + rawProfile[i] + rawProfile[i + 1]) / 3;
+    }
+
+    let pMin = 255, pMax = 0;
+    for (let i = 0; i < BARCODE_SAMPLES; i++) {
+      if (profile[i] < pMin) pMin = profile[i];
+      if (profile[i] > pMax) pMax = profile[i];
+    }
+    const contrast = pMax - pMin;
+    console.log(`[scan] barcode profile: min=${pMin.toFixed(0)} max=${pMax.toFixed(0)} contrast=${contrast.toFixed(0)} oob=${oobCount}/${BARCODE_SCAN_LINES.length * BARCODE_SAMPLES}`);
+    if (contrast < 30) {
+      console.log("[scan] barcode: no contrast, skipping");
+      return null;
+    }
+
+    // Strategy 1: Local adaptive threshold (robust to ink bleed & perspective)
+    // Window ≈ 2-3x widest bar. At ~3 samples/module, widest bar = 4 modules ≈ 12 samples.
+    for (const window of [25, 35, 19]) {
+      const runs = binarizeAdaptive(profile, window);
+      if (!runs) continue;
+      const decoded = tryDecodeRuns(runs);
+      if (decoded) {
+        console.log(`[scan] barcode: "${decoded}" (adaptive w=${window}, runs=${runs.length})`);
+        return decoded;
+      }
+    }
+
+    // Strategy 2: Global threshold fallback (multiple levels)
+    for (const frac of [0.50, 0.45, 0.55, 0.40, 0.60]) {
+      const thresh = pMin + contrast * frac;
+      const runs = binarizeGlobal(profile, thresh);
+      if (!runs) continue;
+      const decoded = tryDecodeRuns(runs);
+      if (decoded) {
+        console.log(`[scan] barcode: "${decoded}" (global thresh=${frac}, runs=${runs.length})`);
+        return decoded;
+      }
+    }
+
+    // Debug log
+    const adaptiveRuns = binarizeAdaptive(profile, 25);
+    const globalRuns = binarizeGlobal(profile, pMin + contrast * 0.5);
+    console.log(`[scan] barcode: decode failed (adaptive=${adaptiveRuns?.length ?? 0} global=${globalRuns?.length ?? 0} first10=${adaptiveRuns?.slice(0, 10).join(",") ?? ""})`);
+    return null;
+  } catch (e) {
+    console.warn("[scan] barcode read error:", e);
+    return null;
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -602,7 +769,7 @@ export async function detectAndScan(
   base64: string,
   questions: QuizQuestion[],
   choiceCount: 4 | 5 = 4,
-): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number] }> {
+): Promise<{ found: false } | { found: true; answers: string[]; confidence: number[]; corners: [number, number][]; imageSize: [number, number]; studentId: string | null }> {
   if (!isNativeAvailable()) {
     // Server fallback: detect first, then scan if found
     try {
@@ -800,8 +967,11 @@ export async function detectAndScan(
     }
   }
 
+  // Read student ID barcode from the bottom of the sheet (post-capture)
+  const studentId = readStudentId(rawPixels, W, H, corners);
+
   return {
-    found: true, answers, confidence, corners, imageSize: [W, H] as [number, number],
+    found: true, answers, confidence, corners, imageSize: [W, H] as [number, number], studentId,
   };
 }
 

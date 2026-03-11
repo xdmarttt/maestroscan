@@ -216,9 +216,7 @@ function tryDecode(runs: number[]): string | null {
   const numSymbols = (runs.length - 7) / 6;
   if (numSymbols < 3) return null; // start + 1 data + checksum minimum
 
-  // Try two calibration strategies for unit width:
-  // 1. From start symbol (first 6 runs = 11 units)
-  // 2. From total barcode (all runs = 11*numSymbols + 13 units)
+  // Strategy 1: Global unit width calibration (two estimates)
   const startPixels = runs.slice(0, 6).reduce((a, b) => a + b, 0);
   const totalPixels = runs.reduce((a, b) => a + b, 0);
   const totalUnits = 11 * numSymbols + 13;
@@ -229,6 +227,12 @@ function tryDecode(runs: number[]): string | null {
     const result = tryDecodeWithUnit(runs, numSymbols, unitWidth);
     if (result !== null) return result;
   }
+
+  // Strategy 2: Per-symbol normalization (handles perspective distortion)
+  // Each 6-element symbol totals 11 modules, so normalize locally
+  const result = tryDecodePerSymbol(runs, numSymbols);
+  if (result !== null) return result;
+
   return null;
 }
 
@@ -245,6 +249,43 @@ function tryDecodeWithUnit(
     quantized.push(raw);
   }
 
+  return validateAndDecode(quantized, numSymbols);
+}
+
+/** Decode by normalizing each 6-element symbol independently (11 modules each).
+ *  Stop pattern (7 elements, 13 modules) normalized separately.
+ *  Robust to perspective distortion that changes bar widths across the barcode. */
+function tryDecodePerSymbol(runs: number[], numSymbols: number): string | null {
+  const quantized: number[] = [];
+
+  // Quantize each symbol's 6 runs using its own total (should be 11 modules)
+  for (let i = 0; i < numSymbols; i++) {
+    const symRuns = runs.slice(i * 6, (i + 1) * 6);
+    const symTotal = symRuns.reduce((a, b) => a + b, 0);
+    const localUnit = symTotal / 11;
+    if (localUnit <= 0) return null;
+    for (const r of symRuns) {
+      const raw = Math.round(r / localUnit);
+      if (raw < 1 || raw > 4) return null;
+      quantized.push(raw);
+    }
+  }
+
+  // Quantize stop pattern (7 runs, 13 modules)
+  const stopRuns = runs.slice(numSymbols * 6);
+  const stopTotal = stopRuns.reduce((a, b) => a + b, 0);
+  const stopUnit = stopTotal / 13;
+  if (stopUnit <= 0) return null;
+  for (const r of stopRuns) {
+    const raw = Math.round(r / stopUnit);
+    if (raw < 1 || raw > 4) return null;
+    quantized.push(raw);
+  }
+
+  return validateAndDecode(quantized, numSymbols);
+}
+
+function validateAndDecode(quantized: number[], numSymbols: number): string | null {
   // Verify stop pattern (last 7 elements)
   const stopSlice = quantized.slice(-7);
   if (stopSlice.join(",") !== STOP_PATTERN.join(",")) return null;

@@ -251,7 +251,8 @@ export default function ScannerScreen() {
         setTimeout(() => setScanError(null), 4000);
       }
 
-      const barcode = lastBarcodeRef.current;
+      // iOS: real-time codeScanner provides barcode. Android: falls back to post-capture reader.
+      const barcode = lastBarcodeRef.current ?? result.studentId ?? null;
       waitForClearRef.current = true;
       setWaitingForClear(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
