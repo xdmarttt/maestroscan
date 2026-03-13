@@ -27,6 +27,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import Constants from "expo-constants";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Colors from "@/constants/colors";
+import { useColors } from "@/lib/theme-context";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
 import { detectAndScan, warmupOpenCV } from "@/lib/scan-offline";
@@ -97,6 +98,7 @@ export default function ScannerScreen() {
   }>();
 
   const { profile } = useAuth();
+  const colors = useColors();
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const classStudentsRef = useRef<any[]>([]);
@@ -511,9 +513,9 @@ export default function ScannerScreen() {
   }, [scanResult, params.quizId, profile]);
 
   const getScoreColor = (pct: number) => {
-    if (pct >= 80) return Colors.success;
-    if (pct >= 50) return Colors.warning;
-    return Colors.error;
+    if (pct >= 80) return colors.success;
+    if (pct >= 50) return colors.warning;
+    return colors.error;
   };
 
   const topPad = Platform.OS === "web" ? 67 : insets.top;
@@ -523,28 +525,28 @@ export default function ScannerScreen() {
 
   if (!permission) {
     return (
-      <View style={[styles.container, styles.center]}>
-        <Text style={styles.permissionText}>Initializing camera...</Text>
+      <View style={[styles.container, styles.center, { backgroundColor: colors.background }]}>
+        <Text style={[styles.permissionText, { color: colors.textSecondary }]}>Initializing camera...</Text>
       </View>
     );
   }
 
   if (!permission.granted && Platform.OS !== "web") {
     return (
-      <View style={[styles.container, { paddingTop: topPad }]}>
+      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
         <Animated.View entering={FadeIn.duration(500)} style={styles.permissionContainer}>
-          <View style={styles.permissionIconWrap}>
-            <Ionicons name="camera-outline" size={52} color={Colors.accent} />
+          <View style={[styles.permissionIconWrap, { backgroundColor: colors.accentDim, borderColor: colors.accent }]}>
+            <Ionicons name="camera-outline" size={52} color={colors.accent} />
           </View>
-          <Text style={styles.permissionTitle}>Camera Access Needed</Text>
-          <Text style={styles.permissionBody}>
+          <Text style={[styles.permissionTitle, { color: colors.textPrimary }]}>Camera Access Needed</Text>
+          <Text style={[styles.permissionBody, { color: colors.textSecondary }]}>
             GradeSnap uses your camera to scan answer sheets and calculate scores instantly.
           </Text>
           <Pressable
             onPress={requestPermission}
-            style={({ pressed }) => [styles.permissionBtn, pressed && { opacity: 0.8 }]}
+            style={({ pressed }) => [styles.permissionBtn, { backgroundColor: colors.accent }, pressed && { opacity: 0.8 }]}
           >
-            <Text style={styles.permissionBtnText}>Allow Camera</Text>
+            <Text style={[styles.permissionBtnText, { color: "#FFFFFF" }]}>Allow Camera</Text>
           </Pressable>
         </Animated.View>
       </View>
@@ -677,25 +679,25 @@ export default function ScannerScreen() {
 
       {/* Scan result popup overlay */}
       {scanResult && (
-        <Animated.View entering={FadeIn.duration(200)} style={styles.popupBackdrop}>
-          <Animated.View entering={ZoomIn.duration(300).delay(100)} style={styles.popupCard}>
+        <Animated.View entering={FadeIn.duration(200)} style={[styles.popupBackdrop, { backgroundColor: colors.overlay }]}>
+          <Animated.View entering={ZoomIn.duration(300).delay(100)} style={[styles.popupCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
 
             {scanResult.saveStatus === "not_found" ? (
               <>
                 {/* Error-only view for unrecognized student */}
-                <View style={[styles.popupScoreBadge, { backgroundColor: Colors.errorDim }]}>
-                  <Ionicons name="person-remove-outline" size={28} color={Colors.error} />
+                <View style={[styles.popupScoreBadge, { backgroundColor: colors.errorDim }]}>
+                  <Ionicons name="person-remove-outline" size={28} color={colors.error} />
                 </View>
-                <Text style={styles.popupErrorTitle}>Student Not Found</Text>
-                <Text style={styles.popupErrorMsg}>
+                <Text style={[styles.popupErrorTitle, { color: colors.error }]}>Student Not Found</Text>
+                <Text style={[styles.popupErrorMsg, { color: colors.textSecondary }]}>
                   The scanned barcode doesn't match any student enrolled in this class. Please check the answer sheet and try again.
                 </Text>
                 <View style={styles.popupButtons}>
                   <Pressable
                     onPress={handleScanNext}
-                    style={({ pressed }) => [styles.popupBtnPrimary, pressed && { opacity: 0.8 }]}
+                    style={({ pressed }) => [styles.popupBtnPrimary, { backgroundColor: colors.accent }, pressed && { opacity: 0.8 }]}
                   >
-                    <MaterialCommunityIcons name="line-scan" size={18} color={Colors.background} />
+                    <MaterialCommunityIcons name="line-scan" size={18} color="#FFFFFF" />
                     <Text style={styles.popupBtnPrimaryText}>Try Again</Text>
                   </Pressable>
                 </View>
@@ -720,8 +722,8 @@ export default function ScannerScreen() {
 
                 {(scanResult.studentName || scanResult.studentId) && (
                   <View style={styles.popupStudentRow}>
-                    <Ionicons name="person-outline" size={14} color={Colors.textSecondary} />
-                    <Text style={styles.popupStudentName}>
+                    <Ionicons name="person-outline" size={14} color={colors.textSecondary} />
+                    <Text style={[styles.popupStudentName, { color: colors.textSecondary }]}>
                       {scanResult.studentName
                         ? scanResult.studentName
                         : `Student ID: ${scanResult.studentId}`}
@@ -731,7 +733,7 @@ export default function ScannerScreen() {
 
                 {scanResult.saveStatus === "saving" && (
                   <View style={styles.popupStatusRow}>
-                    <Text style={[styles.popupStatusText, { color: Colors.textSecondary }]}>
+                    <Text style={[styles.popupStatusText, { color: colors.textSecondary }]}>
                       Saving...
                     </Text>
                   </View>
@@ -739,33 +741,33 @@ export default function ScannerScreen() {
 
                 {scanResult.saveStatus === "saved" && (
                   <View style={styles.popupStatusRow}>
-                    <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
-                    <Text style={[styles.popupStatusText, { color: Colors.success }]}>
+                    <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+                    <Text style={[styles.popupStatusText, { color: colors.success }]}>
                       Saved to cloud
                     </Text>
                   </View>
                 )}
 
                 {scanResult.saveStatus === "overwrite_prompt" && scanResult.overwriteInfo && (
-                  <View style={styles.popupOverwriteCard}>
+                  <View style={[styles.popupOverwriteCard, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
                     <View style={styles.popupStatusRow}>
-                      <Ionicons name="information-circle" size={16} color={Colors.warning} />
-                      <Text style={[styles.popupStatusText, { color: Colors.warning }]}>
+                      <Ionicons name="information-circle" size={16} color={colors.warning} />
+                      <Text style={[styles.popupStatusText, { color: colors.warning }]}>
                         Existing result: {scanResult.overwriteInfo.oldScore}
                       </Text>
                     </View>
                     <View style={styles.popupOverwriteActions}>
                       <Pressable
                         onPress={() => setScanResult(prev => prev ? { ...prev, saveStatus: undefined } : prev)}
-                        style={({ pressed }) => [styles.popupOverwriteBtn, pressed && { opacity: 0.7 }]}
+                        style={({ pressed }) => [styles.popupOverwriteBtn, { backgroundColor: colors.surface, borderColor: colors.border }, pressed && { opacity: 0.7 }]}
                       >
-                        <Text style={[styles.popupOverwriteBtnText, { color: Colors.textSecondary }]}>Keep Old</Text>
+                        <Text style={[styles.popupOverwriteBtnText, { color: colors.textSecondary }]}>Keep Old</Text>
                       </Pressable>
                       <Pressable
                         onPress={handleOverwrite}
-                        style={({ pressed }) => [styles.popupOverwriteBtn, styles.popupOverwriteBtnDanger, pressed && { opacity: 0.7 }]}
+                        style={({ pressed }) => [styles.popupOverwriteBtn, { borderColor: colors.error, backgroundColor: colors.errorDim }, pressed && { opacity: 0.7 }]}
                       >
-                        <Text style={[styles.popupOverwriteBtnText, { color: Colors.error }]}>Overwrite</Text>
+                        <Text style={[styles.popupOverwriteBtnText, { color: colors.error }]}>Overwrite</Text>
                       </Pressable>
                     </View>
                   </View>
@@ -774,17 +776,17 @@ export default function ScannerScreen() {
                 <View style={styles.popupButtons}>
                   <Pressable
                     onPress={handleScanNext}
-                    style={({ pressed }) => [styles.popupBtnPrimary, pressed && { opacity: 0.8 }]}
+                    style={({ pressed }) => [styles.popupBtnPrimary, { backgroundColor: colors.accent }, pressed && { opacity: 0.8 }]}
                   >
-                    <MaterialCommunityIcons name="line-scan" size={18} color={Colors.background} />
+                    <MaterialCommunityIcons name="line-scan" size={18} color="#FFFFFF" />
                     <Text style={styles.popupBtnPrimaryText}>Scan Next</Text>
                   </Pressable>
                   <Pressable
                     onPress={handleViewDetails}
-                    style={({ pressed }) => [styles.popupBtnSecondary, pressed && { opacity: 0.8 }]}
+                    style={({ pressed }) => [styles.popupBtnSecondary, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }, pressed && { opacity: 0.8 }]}
                   >
-                    <Text style={styles.popupBtnSecondaryText}>View Details</Text>
-                    <Ionicons name="arrow-forward" size={16} color={Colors.accent} />
+                    <Text style={[styles.popupBtnSecondaryText, { color: colors.accent }]}>View Details</Text>
+                    <Ionicons name="arrow-forward" size={16} color={colors.accent} />
                   </Pressable>
                 </View>
               </>
@@ -941,9 +943,7 @@ const styles = StyleSheet.create({
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: Colors.accentDim,
     borderWidth: 1,
-    borderColor: Colors.accent,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 8,
@@ -951,19 +951,16 @@ const styles = StyleSheet.create({
   permissionTitle: {
     fontSize: 22,
     fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
     textAlign: "center",
   },
   permissionBody: {
     fontSize: 15,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
     textAlign: "center",
     lineHeight: 22,
   },
   permissionBtn: {
     marginTop: 8,
-    backgroundColor: Colors.accent,
     borderRadius: 14,
     paddingHorizontal: 36,
     paddingVertical: 14,
@@ -971,28 +968,23 @@ const styles = StyleSheet.create({
   permissionBtnText: {
     fontSize: 16,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.background,
   },
   permissionText: {
-    color: Colors.textSecondary,
     fontFamily: "Inter_400Regular",
   },
   popupBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: Colors.overlay,
     alignItems: "center",
     justifyContent: "center",
     zIndex: 100,
   },
   popupCard: {
-    backgroundColor: Colors.surface,
     borderRadius: 24,
     paddingVertical: 32,
     paddingHorizontal: 28,
     alignItems: "center",
     width: SCREEN_WIDTH - 64,
     borderWidth: 1,
-    borderColor: Colors.border,
     gap: 4,
   },
   popupScoreBadge: {
@@ -1023,7 +1015,6 @@ const styles = StyleSheet.create({
   popupStudentName: {
     fontSize: 14,
     fontFamily: "Inter_500Medium",
-    color: Colors.textSecondary,
   },
   popupButtons: {
     width: "100%",
@@ -1031,7 +1022,6 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   popupBtnPrimary: {
-    backgroundColor: Colors.accent,
     borderRadius: 14,
     paddingVertical: 14,
     flexDirection: "row",
@@ -1042,10 +1032,9 @@ const styles = StyleSheet.create({
   popupBtnPrimaryText: {
     fontSize: 15,
     fontFamily: "Inter_700Bold",
-    color: Colors.background,
+    color: "#FFFFFF",
   },
   popupBtnSecondary: {
-    backgroundColor: Colors.surfaceElevated,
     borderRadius: 14,
     paddingVertical: 14,
     flexDirection: "row",
@@ -1053,12 +1042,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   popupBtnSecondaryText: {
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.accent,
   },
   popupStatusRow: {
     flexDirection: "row",
@@ -1072,13 +1059,11 @@ const styles = StyleSheet.create({
   },
   popupOverwriteCard: {
     width: "100%",
-    backgroundColor: Colors.surfaceElevated,
     borderRadius: 12,
     padding: 12,
     gap: 10,
     marginTop: 4,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   popupOverwriteActions: {
     flexDirection: "row",
@@ -1090,13 +1075,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  popupOverwriteBtnDanger: {
-    borderColor: Colors.error,
-    backgroundColor: Colors.errorDim,
   },
   popupOverwriteBtnText: {
     fontSize: 13,
@@ -1105,13 +1084,11 @@ const styles = StyleSheet.create({
   popupErrorTitle: {
     fontSize: 20,
     fontFamily: "Inter_700Bold",
-    color: Colors.error,
     marginTop: 4,
   },
   popupErrorMsg: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
     textAlign: "center",
     lineHeight: 19,
     marginBottom: 4,
