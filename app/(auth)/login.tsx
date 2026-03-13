@@ -8,16 +8,22 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, { FadeInDown } from "react-native-reanimated";
-import { MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
-import Colors from "@/constants/colors";
+import Animated, { FadeInDown, FadeIn } from "react-native-reanimated";
+import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/lib/auth-context";
+import { useTheme, useColors } from "@/lib/theme-context";
+
+const logoWhite = require("@/assets/images/logo-white.png");
+const logoBlack = require("@/assets/images/logo-black.png");
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const { signIn } = useAuth();
+  const { isDark, toggleTheme } = useTheme();
+  const colors = useColors();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -40,27 +46,68 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={[styles.container, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 20 }]}
+      style={[
+        styles.container,
+        {
+          backgroundColor: colors.background,
+          paddingTop: insets.top + 20,
+          paddingBottom: insets.bottom + 20,
+        },
+      ]}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
+      {/* Theme toggle in top-right */}
+      <Animated.View entering={FadeIn.duration(400)} style={styles.themeToggleWrap}>
+        <Pressable
+          onPress={toggleTheme}
+          style={({ pressed }) => [
+            styles.themeBtn,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+            pressed && { opacity: 0.6 },
+          ]}
+        >
+          <Ionicons
+            name={isDark ? "sunny-outline" : "moon-outline"}
+            size={18}
+            color={isDark ? colors.warning : colors.accent}
+          />
+        </Pressable>
+      </Animated.View>
+
       <Animated.View entering={FadeInDown.duration(600)} style={styles.content}>
         <View style={styles.logoSection}>
-          <View style={styles.logoIcon}>
-            <MaterialCommunityIcons name="scan-helper" size={40} color={Colors.accent} />
+          <View style={[styles.logoContainer, { backgroundColor: colors.accentDim }]}>
+            <Image
+              source={isDark ? logoWhite : logoBlack}
+              style={styles.logoImage}
+              resizeMode="contain"
+            />
           </View>
-          <Text style={styles.appTitle}>MaestroGrade</Text>
-          <Text style={styles.appSubtitle}>Grade Like a Maestro</Text>
+          <Text style={[styles.appTitle, { color: colors.textPrimary }]}>MaestroGrade</Text>
+          <Text style={[styles.appSubtitle, { color: colors.textSecondary }]}>
+            Grade Like a Maestro
+          </Text>
         </View>
 
         <View style={styles.form}>
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Email</Text>
-            <View style={styles.inputWrapper}>
-              <Ionicons name="mail-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Email</Text>
+            <View
+              style={[
+                styles.inputWrapper,
+                { backgroundColor: colors.inputBackground, borderColor: colors.border },
+              ]}
+            >
+              <Ionicons
+                name="mail-outline"
+                size={18}
+                color={colors.textMuted}
+                style={styles.inputIcon}
+              />
               <TextInput
-                style={styles.input}
+                style={[styles.input, { color: colors.textPrimary }]}
                 placeholder="teacher@school.edu"
-                placeholderTextColor={Colors.textMuted}
+                placeholderTextColor={colors.textMuted}
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
@@ -71,13 +118,23 @@ export default function LoginScreen() {
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Password</Text>
-            <View style={styles.inputWrapper}>
-              <Ionicons name="lock-closed-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Password</Text>
+            <View
+              style={[
+                styles.inputWrapper,
+                { backgroundColor: colors.inputBackground, borderColor: colors.border },
+              ]}
+            >
+              <Ionicons
+                name="lock-closed-outline"
+                size={18}
+                color={colors.textMuted}
+                style={styles.inputIcon}
+              />
               <TextInput
-                style={styles.input}
+                style={[styles.input, { color: colors.textPrimary }]}
                 placeholder="Enter your password"
-                placeholderTextColor={Colors.textMuted}
+                placeholderTextColor={colors.textMuted}
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry={!showPassword}
@@ -87,33 +144,43 @@ export default function LoginScreen() {
                 <Ionicons
                   name={showPassword ? "eye-off-outline" : "eye-outline"}
                   size={18}
-                  color={Colors.textMuted}
+                  color={colors.textMuted}
                 />
               </Pressable>
             </View>
           </View>
 
           {error && (
-            <View style={styles.errorRow}>
-              <Ionicons name="alert-circle-outline" size={16} color={Colors.error} />
-              <Text style={styles.errorText}>{error}</Text>
+            <View
+              style={[
+                styles.errorRow,
+                { backgroundColor: colors.errorDim, borderColor: colors.error },
+              ]}
+            >
+              <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
+              <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
             </View>
           )}
 
           <Pressable
             onPress={handleSignIn}
             disabled={loading}
-            style={({ pressed }) => [styles.signInBtn, pressed && { opacity: 0.8 }, loading && { opacity: 0.6 }]}
+            style={({ pressed }) => [
+              styles.signInBtn,
+              { backgroundColor: colors.accent },
+              pressed && { opacity: 0.8 },
+              loading && { opacity: 0.6 },
+            ]}
           >
             {loading ? (
-              <ActivityIndicator color={Colors.background} />
+              <ActivityIndicator color="#FFFFFF" />
             ) : (
               <Text style={styles.signInBtnText}>Sign In</Text>
             )}
           </Pressable>
         </View>
 
-        <Text style={styles.footerText}>
+        <Text style={[styles.footerText, { color: colors.textMuted }]}>
           Sign in with your MaestroGrade account.{"\n"}
           Register at the web dashboard.
         </Text>
@@ -125,7 +192,18 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+  },
+  themeToggleWrap: {
+    alignItems: "flex-end",
+    paddingHorizontal: 20,
+  },
+  themeBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
   content: {
     flex: 1,
@@ -136,27 +214,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 48,
   },
-  logoIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 24,
-    backgroundColor: Colors.accentDim,
-    borderWidth: 1,
-    borderColor: Colors.accent,
+  logoContainer: {
+    width: 88,
+    height: 88,
+    borderRadius: 26,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 16,
   },
+  logoImage: {
+    width: 52,
+    height: 52,
+  },
   appTitle: {
     fontSize: 28,
     fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
     letterSpacing: -0.5,
   },
   appSubtitle: {
     fontSize: 14,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
     marginTop: 4,
   },
   form: {
@@ -168,17 +245,14 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.textSecondary,
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
   inputWrapper: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.surface,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   inputIcon: {
     paddingLeft: 14,
@@ -189,7 +263,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 15,
     fontFamily: "Inter_400Regular",
-    color: Colors.textPrimary,
   },
   eyeBtn: {
     paddingRight: 14,
@@ -199,25 +272,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: Colors.errorDim,
     borderRadius: 10,
     padding: 12,
     borderWidth: 1,
-    borderColor: Colors.error,
   },
   errorText: {
     flex: 1,
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.error,
   },
   signInBtn: {
-    backgroundColor: Colors.accent,
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: Colors.accent,
+    shadowColor: "#7650FF",
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 16,
     shadowOpacity: 0.3,
@@ -227,12 +296,11 @@ const styles = StyleSheet.create({
   signInBtnText: {
     fontSize: 16,
     fontFamily: "Inter_700Bold",
-    color: Colors.background,
+    color: "#FFFFFF",
   },
   footerText: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
     textAlign: "center",
     marginTop: 32,
     lineHeight: 18,

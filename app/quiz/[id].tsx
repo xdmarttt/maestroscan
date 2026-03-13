@@ -13,12 +13,13 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import Colors from "@/constants/colors";
+import { useColors } from "@/lib/theme-context";
 import { getQuizById, getAnswerSheetsByQuiz } from "@/lib/queries";
 
 export default function QuizDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
+  const colors = useColors();
   const [quiz, setQuiz] = useState<any>(null);
   const [sheets, setSheets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,16 +62,16 @@ export default function QuizDetailScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-        <ActivityIndicator color={Colors.accent} size="large" />
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+        <ActivityIndicator color={colors.accent} size="large" />
       </View>
     );
   }
 
   if (!quiz) {
     return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-        <Text style={styles.emptyText}>Quiz not found</Text>
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+        <Text style={[styles.emptyText, { color: colors.textMuted }]}>Quiz not found</Text>
       </View>
     );
   }
@@ -80,8 +81,8 @@ export default function QuizDetailScreen() {
     ? `${cls.subject}${cls.grade_level ? ` ${cls.grade_level}` : ""}${cls.section ? ` · ${cls.section}` : ""}`
     : "";
 
-  const categoryColors: Record<string, string> = { WW: Colors.accent, PT: Colors.warning, QA: Colors.success };
-  const catColor = categoryColors[quiz.category] ?? Colors.textMuted;
+  const categoryColors: Record<string, string> = { WW: colors.accent, PT: colors.warning, QA: colors.success };
+  const catColor = categoryColors[quiz.category] ?? colors.textMuted;
 
   const answerKey = (quiz.answer_key ?? {}) as Record<string, string>;
   const hasAnswerKey = Object.keys(answerKey).length > 0;
@@ -97,66 +98,78 @@ export default function QuizDetailScreen() {
           pathname: "/scan-result",
           params: { sheetId: sheet.id, quizId: id },
         })}
-        style={({ pressed }) => [styles.sheetCard, pressed && { opacity: 0.7 }]}
+        style={({ pressed }) => [
+          styles.sheetCard,
+          { backgroundColor: colors.surface, borderColor: colors.border },
+          pressed && { opacity: 0.7 },
+        ]}
       >
         <View style={styles.sheetLeft}>
-          <Text style={styles.sheetName}>{sheet.studentName}</Text>
-          {sheet.lrn ? <Text style={styles.sheetLrn}>LRN: {sheet.lrn}</Text> : null}
+          <Text style={[styles.sheetName, { color: colors.textPrimary }]}>{sheet.studentName}</Text>
+          {sheet.lrn ? <Text style={[styles.sheetLrn, { color: colors.textMuted }]}>LRN: {sheet.lrn}</Text> : null}
         </View>
         <View style={styles.sheetRight}>
           <Text style={[styles.sheetScore, {
-            color: sheet.percentage >= 80 ? Colors.success : sheet.percentage >= 50 ? Colors.warning : Colors.error,
+            color: sheet.percentage >= 80 ? colors.success : sheet.percentage >= 50 ? colors.warning : colors.error,
           }]}>
             {sheet.score}/{sheet.totalPoints}
           </Text>
-          <Text style={styles.sheetPercent}>{Math.round(sheet.percentage)}%</Text>
+          <Text style={[styles.sheetPercent, { color: colors.textMuted }]}>{Math.round(sheet.percentage)}%</Text>
         </View>
-        <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} style={{ marginLeft: 8 }} />
+        <Ionicons name="chevron-forward" size={16} color={colors.textMuted} style={{ marginLeft: 8 }} />
       </Pressable>
     </Animated.View>
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.background }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={22} color={Colors.textPrimary} />
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </Pressable>
         <View style={styles.headerInfo}>
-          <Text style={styles.title} numberOfLines={1}>{quiz.title}</Text>
-          <Text style={styles.subtitle}>{className}</Text>
+          <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={1}>{quiz.title}</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{className}</Text>
         </View>
       </View>
 
       {/* Info card + action row */}
       <View style={styles.topSection}>
-        <Animated.View entering={FadeInDown.duration(400)} style={styles.infoCard}>
+        <Animated.View entering={FadeInDown.duration(400)} style={[styles.infoCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={styles.infoRow}>
-            <View style={styles.infoPill}>
+            <View style={[styles.infoPill, { backgroundColor: colors.surfaceElevated }]}>
               <Text style={[styles.pillText, { color: catColor }]}>{quiz.category}</Text>
             </View>
-            <Text style={styles.infoLabel}>{quiz.total_points} points</Text>
-            <Text style={styles.infoLabel}>{quiz.status ?? "draft"}</Text>
+            <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>{quiz.total_points} points</Text>
+            <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>{quiz.status ?? "draft"}</Text>
           </View>
           {quiz.answer_sheet_format && (
-            <Text style={styles.formatInfo}>{quiz.answer_sheet_format}-item answer sheet</Text>
+            <Text style={[styles.formatInfo, { color: colors.textMuted }]}>{quiz.answer_sheet_format}-item answer sheet</Text>
           )}
         </Animated.View>
 
         <Animated.View entering={FadeInDown.duration(400).delay(100)} style={styles.actionRow}>
           <Pressable
             onPress={handleScan}
-            style={({ pressed }) => [styles.scanBtn, { flex: 1 }, pressed && { opacity: 0.8 }]}
+            style={({ pressed }) => [
+              styles.scanBtn,
+              { flex: 1, backgroundColor: colors.accent, shadowColor: colors.accent },
+              pressed && { opacity: 0.8 },
+            ]}
           >
-            <MaterialCommunityIcons name="line-scan" size={22} color={Colors.background} />
-            <Text style={styles.scanBtnText}>Scan</Text>
+            <MaterialCommunityIcons name="line-scan" size={22} color={colors.background} />
+            <Text style={[styles.scanBtnText, { color: colors.background }]}>Scan</Text>
           </Pressable>
           <Pressable
             onPress={() => router.push({ pathname: "/answer-key", params: { id: quiz.id } })}
-            style={({ pressed }) => [styles.editKeyBtn, pressed && { opacity: 0.8 }]}
+            style={({ pressed }) => [
+              styles.editKeyBtn,
+              { backgroundColor: colors.surface, borderColor: colors.accent },
+              pressed && { opacity: 0.8 },
+            ]}
           >
-            <Ionicons name="create-outline" size={20} color={Colors.accent} />
-            <Text style={styles.editKeyBtnText}>Edit Key</Text>
+            <Ionicons name="create-outline" size={20} color={colors.accent} />
+            <Text style={[styles.editKeyBtnText, { color: colors.accent }]}>Edit Key</Text>
           </Pressable>
         </Animated.View>
       </View>
@@ -165,17 +178,33 @@ export default function QuizDetailScreen() {
       <View style={styles.tabRow}>
         <Pressable
           onPress={() => setTab("sheets")}
-          style={[styles.tabBtn, tab === "sheets" && styles.tabBtnActive]}
+          style={[
+            styles.tabBtn,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+            tab === "sheets" && { backgroundColor: colors.accentDim, borderColor: colors.accent },
+          ]}
         >
-          <Text style={[styles.tabText, tab === "sheets" && styles.tabTextActive]}>
+          <Text style={[
+            styles.tabText,
+            { color: colors.textMuted },
+            tab === "sheets" && { color: colors.accent },
+          ]}>
             Scanned Sheets ({sheets.length})
           </Text>
         </Pressable>
         <Pressable
           onPress={() => setTab("key")}
-          style={[styles.tabBtn, tab === "key" && styles.tabBtnActive]}
+          style={[
+            styles.tabBtn,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+            tab === "key" && { backgroundColor: colors.accentDim, borderColor: colors.accent },
+          ]}
         >
-          <Text style={[styles.tabText, tab === "key" && styles.tabTextActive]}>
+          <Text style={[
+            styles.tabText,
+            { color: colors.textMuted },
+            tab === "key" && { color: colors.accent },
+          ]}>
             Answer Key
           </Text>
         </Pressable>
@@ -192,16 +221,16 @@ export default function QuizDetailScreen() {
           columnWrapperStyle={{ gap: 8 }}
           ListEmptyComponent={
             <View style={styles.emptySheets}>
-              <Ionicons name="key-outline" size={32} color={Colors.textMuted} />
-              <Text style={styles.emptyText}>No answer key set</Text>
-              <Text style={styles.emptySubtext}>Tap "Edit Key" to add the answer key</Text>
+              <Ionicons name="key-outline" size={32} color={colors.textMuted} />
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>No answer key set</Text>
+              <Text style={[styles.emptySubtext, { color: colors.textMuted }]}>Tap "Edit Key" to add the answer key</Text>
             </View>
           }
           renderItem={({ item: [num, answer] }) => (
             <View style={styles.answerKeyItem}>
-              <Text style={styles.answerKeyNum}>{num}</Text>
-              <View style={styles.answerKeyBubble}>
-                <Text style={styles.answerKeyLetter}>{answer}</Text>
+              <Text style={[styles.answerKeyNum, { color: colors.textMuted }]}>{num}</Text>
+              <View style={[styles.answerKeyBubble, { backgroundColor: colors.accentDim, borderColor: colors.accent }]}>
+                <Text style={[styles.answerKeyLetter, { color: colors.accent }]}>{answer}</Text>
               </View>
             </View>
           )}
@@ -214,12 +243,12 @@ export default function QuizDetailScreen() {
           contentContainerStyle={styles.list}
           ListHeaderComponent={
             sheets.length > 0 ? (
-              <View style={styles.searchWrap}>
-                <Ionicons name="search-outline" size={16} color={Colors.textMuted} />
+              <View style={[styles.searchWrap, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Ionicons name="search-outline" size={16} color={colors.textMuted} />
                 <TextInput
-                  style={styles.searchInput}
+                  style={[styles.searchInput, { color: colors.textPrimary }]}
                   placeholder="Search by student name..."
-                  placeholderTextColor={Colors.textMuted}
+                  placeholderTextColor={colors.textMuted}
                   value={search}
                   onChangeText={setSearch}
                   autoCapitalize="none"
@@ -227,7 +256,7 @@ export default function QuizDetailScreen() {
                 />
                 {search.length > 0 && (
                   <Pressable onPress={() => setSearch("")}>
-                    <Ionicons name="close-circle" size={16} color={Colors.textMuted} />
+                    <Ionicons name="close-circle" size={16} color={colors.textMuted} />
                   </Pressable>
                 )}
               </View>
@@ -235,11 +264,11 @@ export default function QuizDetailScreen() {
           }
           ListEmptyComponent={
             <View style={styles.emptySheets}>
-              <Ionicons name="scan-outline" size={32} color={Colors.textMuted} />
-              <Text style={styles.emptyText}>
+              <Ionicons name="scan-outline" size={32} color={colors.textMuted} />
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>
                 {search ? "No matching results" : "No scanned sheets yet"}
               </Text>
-              {!search && <Text style={styles.emptySubtext}>Tap "Scan" to start grading</Text>}
+              {!search && <Text style={[styles.emptySubtext, { color: colors.textMuted }]}>Tap "Scan" to start grading</Text>}
             </View>
           }
           renderItem={renderSheetItem}
@@ -252,7 +281,6 @@ export default function QuizDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
   center: {
     alignItems: "center",
@@ -269,9 +297,7 @@ const styles = StyleSheet.create({
   backBtn: {
     padding: 8,
     borderRadius: 12,
-    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   headerInfo: {
     flex: 1,
@@ -279,13 +305,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
     letterSpacing: -0.3,
   },
   subtitle: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
     marginTop: 2,
   },
   topSection: {
@@ -294,11 +318,9 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
   },
   infoCard: {
-    backgroundColor: Colors.surface,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: Colors.border,
     gap: 8,
   },
   infoRow: {
@@ -310,7 +332,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
-    backgroundColor: Colors.surfaceElevated,
   },
   pillText: {
     fontSize: 12,
@@ -319,26 +340,22 @@ const styles = StyleSheet.create({
   infoLabel: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
   },
   formatInfo: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
   },
   actionRow: {
     flexDirection: "row",
     gap: 12,
   },
   scanBtn: {
-    backgroundColor: Colors.accent,
     borderRadius: 16,
     paddingVertical: 18,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
-    shadowColor: Colors.accent,
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 16,
     shadowOpacity: 0.3,
@@ -347,10 +364,8 @@ const styles = StyleSheet.create({
   scanBtnText: {
     fontSize: 17,
     fontFamily: "Inter_700Bold",
-    color: Colors.background,
   },
   editKeyBtn: {
-    backgroundColor: Colors.surface,
     borderRadius: 16,
     paddingVertical: 18,
     paddingHorizontal: 20,
@@ -359,12 +374,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     borderWidth: 1,
-    borderColor: Colors.accent,
   },
   editKeyBtnText: {
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.accent,
   },
   tabRow: {
     flexDirection: "row",
@@ -376,21 +389,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  tabBtnActive: {
-    backgroundColor: Colors.accentDim,
-    borderColor: Colors.accent,
   },
   tabText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
-    color: Colors.textMuted,
-  },
-  tabTextActive: {
-    color: Colors.accent,
   },
   list: {
     padding: 20,
@@ -407,12 +410,10 @@ const styles = StyleSheet.create({
   searchWrap: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.surface,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: Colors.border,
     gap: 8,
     marginBottom: 12,
   },
@@ -420,7 +421,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontFamily: "Inter_400Regular",
-    color: Colors.textPrimary,
     padding: 0,
   },
   answerKeyItem: {
@@ -432,22 +432,18 @@ const styles = StyleSheet.create({
   answerKeyNum: {
     fontSize: 10,
     fontFamily: "Inter_500Medium",
-    color: Colors.textMuted,
   },
   answerKeyBubble: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: Colors.accentDim,
     borderWidth: 1.5,
-    borderColor: Colors.accent,
     alignItems: "center",
     justifyContent: "center",
   },
   answerKeyLetter: {
     fontSize: 13,
     fontFamily: "Inter_700Bold",
-    color: Colors.accent,
   },
   emptySheets: {
     alignItems: "center",
@@ -457,19 +453,15 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     fontFamily: "Inter_500Medium",
-    color: Colors.textMuted,
   },
   emptySubtext: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
   },
   sheetCard: {
-    backgroundColor: Colors.surface,
     borderRadius: 14,
     padding: 14,
     borderWidth: 1,
-    borderColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
   },
@@ -480,12 +472,10 @@ const styles = StyleSheet.create({
   sheetName: {
     fontSize: 14,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.textPrimary,
   },
   sheetLrn: {
     fontSize: 11,
     fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
   },
   sheetRight: {
     alignItems: "flex-end",
@@ -498,6 +488,5 @@ const styles = StyleSheet.create({
   sheetPercent: {
     fontSize: 11,
     fontFamily: "Inter_500Medium",
-    color: Colors.textMuted,
   },
 });

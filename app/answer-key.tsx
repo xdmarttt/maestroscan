@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import Colors from "@/constants/colors";
+import { useColors } from "@/lib/theme-context";
 import { getQuizById, updateQuizAnswerKey } from "@/lib/queries";
 
 type Choice = "A" | "B" | "C" | "D" | "E";
@@ -21,6 +21,7 @@ type Choice = "A" | "B" | "C" | "D" | "E";
 export default function AnswerKeyEditor() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
+  const colors = useColors();
   const [quiz, setQuiz] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -89,47 +90,52 @@ export default function AnswerKeyEditor() {
 
   if (loading) {
     return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-        <ActivityIndicator color={Colors.accent} size="large" />
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+        <ActivityIndicator color={colors.accent} size="large" />
       </View>
     );
   }
 
   if (!quiz) {
     return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-        <Text style={styles.emptyText}>Quiz not found</Text>
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+        <Text style={[styles.emptyText, { color: colors.textMuted }]}>Quiz not found</Text>
       </View>
     );
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.background }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={22} color={Colors.textPrimary} />
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </Pressable>
         <View style={styles.headerInfo}>
-          <Text style={styles.title}>Edit Answer Key</Text>
-          <Text style={styles.subtitle}>{quiz.title}</Text>
+          <Text style={[styles.title, { color: colors.textPrimary }]}>Edit Answer Key</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{quiz.title}</Text>
         </View>
         <Pressable
           onPress={handleSave}
           disabled={saving}
-          style={({ pressed }) => [styles.saveHeaderBtn, pressed && { opacity: 0.7 }, saving && { opacity: 0.5 }]}
+          style={({ pressed }) => [
+            styles.saveHeaderBtn,
+            { backgroundColor: colors.accentDim, borderColor: colors.accent },
+            pressed && { opacity: 0.7 },
+            saving && { opacity: 0.5 },
+          ]}
         >
           {saving ? (
-            <ActivityIndicator color={Colors.accent} size="small" />
+            <ActivityIndicator color={colors.accent} size="small" />
           ) : (
-            <Text style={styles.saveHeaderBtnText}>Save</Text>
+            <Text style={[styles.saveHeaderBtnText, { color: colors.accent }]}>Save</Text>
           )}
         </Pressable>
       </View>
 
-      <View style={styles.progressBar}>
-        <View style={[styles.progressFill, { width: `${(answeredCount / totalItems) * 100}%` }]} />
+      <View style={[styles.progressBar, { backgroundColor: colors.border }]}>
+        <View style={[styles.progressFill, { width: `${(answeredCount / totalItems) * 100}%`, backgroundColor: colors.accent }]} />
       </View>
-      <Text style={styles.progressText}>
+      <Text style={[styles.progressText, { color: colors.textMuted }]}>
         {answeredCount} of {totalItems} answered
       </Text>
 
@@ -142,10 +148,10 @@ export default function AnswerKeyEditor() {
             <Animated.View
               key={num}
               entering={FadeInDown.duration(250).delay(Math.min(index * 20, 300))}
-              style={styles.questionRow}
+              style={[styles.questionRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
             >
               <View style={styles.questionNum}>
-                <Text style={[styles.questionNumText, selected && { color: Colors.accent }]}>
+                <Text style={[styles.questionNumText, { color: selected ? colors.accent : colors.textMuted }]}>
                   {num}
                 </Text>
               </View>
@@ -158,14 +164,17 @@ export default function AnswerKeyEditor() {
                       onPress={() => handleSelect(num, choice)}
                       style={({ pressed }) => [
                         styles.bubble,
-                        isSelected && styles.bubbleSelected,
+                        {
+                          borderColor: isSelected ? colors.accent : colors.border,
+                          backgroundColor: isSelected ? colors.accentDim : colors.surfaceElevated,
+                        },
                         pressed && { opacity: 0.7 },
                       ]}
                     >
                       <Text
                         style={[
                           styles.bubbleText,
-                          isSelected && styles.bubbleTextSelected,
+                          { color: isSelected ? colors.accent : colors.textMuted },
                         ]}
                       >
                         {choice}
@@ -175,7 +184,7 @@ export default function AnswerKeyEditor() {
                 })}
               </View>
               {selected && (
-                <Ionicons name="checkmark-circle" size={18} color={Colors.success} />
+                <Ionicons name="checkmark-circle" size={18} color={colors.success} />
               )}
             </Animated.View>
           );
@@ -184,18 +193,23 @@ export default function AnswerKeyEditor() {
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 12 }]}>
+      <View style={[styles.bottomBar, { borderColor: colors.border, backgroundColor: colors.surface, paddingBottom: insets.bottom + 12 }]}>
         <Pressable
           onPress={handleSave}
           disabled={saving}
-          style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.8 }, saving && { opacity: 0.6 }]}
+          style={({ pressed }) => [
+            styles.saveBtn,
+            { backgroundColor: colors.accent, shadowColor: colors.accent },
+            pressed && { opacity: 0.8 },
+            saving && { opacity: 0.6 },
+          ]}
         >
           {saving ? (
-            <ActivityIndicator color={Colors.background} />
+            <ActivityIndicator color={colors.background} />
           ) : (
             <>
-              <Ionicons name="checkmark" size={20} color={Colors.background} />
-              <Text style={styles.saveBtnText}>
+              <Ionicons name="checkmark" size={20} color={colors.background} />
+              <Text style={[styles.saveBtnText, { color: colors.background }]}>
                 Save Answer Key ({answeredCount}/{totalItems})
               </Text>
             </>
@@ -209,7 +223,6 @@ export default function AnswerKeyEditor() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
   center: {
     alignItems: "center",
@@ -226,9 +239,7 @@ const styles = StyleSheet.create({
   backBtn: {
     padding: 8,
     borderRadius: 12,
-    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   headerInfo: {
     flex: 1,
@@ -236,31 +247,25 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
     letterSpacing: -0.3,
   },
   subtitle: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
     marginTop: 2,
   },
   saveHeaderBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: Colors.accentDim,
     borderWidth: 1,
-    borderColor: Colors.accent,
   },
   saveHeaderBtnText: {
     fontSize: 14,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.accent,
   },
   progressBar: {
     height: 3,
-    backgroundColor: Colors.border,
     marginHorizontal: 20,
     borderRadius: 2,
     marginTop: 8,
@@ -268,13 +273,11 @@ const styles = StyleSheet.create({
   },
   progressFill: {
     height: "100%",
-    backgroundColor: Colors.accent,
     borderRadius: 2,
   },
   progressText: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
     textAlign: "center",
     marginTop: 6,
     marginBottom: 4,
@@ -287,13 +290,11 @@ const styles = StyleSheet.create({
   questionRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.surface,
     borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 12,
     gap: 12,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   questionNum: {
     width: 32,
@@ -302,7 +303,6 @@ const styles = StyleSheet.create({
   questionNumText: {
     fontSize: 14,
     fontFamily: "Inter_700Bold",
-    color: Colors.textMuted,
   },
   bubbleRow: {
     flex: 1,
@@ -314,39 +314,25 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 20,
     borderWidth: 2,
-    borderColor: Colors.border,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: Colors.surfaceElevated,
-  },
-  bubbleSelected: {
-    borderColor: Colors.accent,
-    backgroundColor: Colors.accentDim,
   },
   bubbleText: {
     fontSize: 15,
     fontFamily: "Inter_700Bold",
-    color: Colors.textMuted,
-  },
-  bubbleTextSelected: {
-    color: Colors.accent,
   },
   bottomBar: {
     paddingHorizontal: 20,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
   },
   saveBtn: {
-    backgroundColor: Colors.accent,
     borderRadius: 16,
     paddingVertical: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
-    shadowColor: Colors.accent,
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 16,
     shadowOpacity: 0.3,
@@ -355,11 +341,9 @@ const styles = StyleSheet.create({
   saveBtnText: {
     fontSize: 16,
     fontFamily: "Inter_700Bold",
-    color: Colors.background,
   },
   emptyText: {
     fontSize: 14,
     fontFamily: "Inter_500Medium",
-    color: Colors.textMuted,
   },
 });

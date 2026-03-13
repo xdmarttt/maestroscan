@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import Colors from "@/constants/colors";
+import { useColors } from "@/lib/theme-context";
 import { getAnswerSheetById, getQuizById, updateAnswerSheet } from "@/lib/queries";
 
 type Choice = "A" | "B" | "C" | "D" | "E";
@@ -21,6 +21,7 @@ type Choice = "A" | "B" | "C" | "D" | "E";
 export default function ScanResultScreen() {
   const { sheetId, quizId } = useLocalSearchParams<{ sheetId: string; quizId: string }>();
   const insets = useSafeAreaInsets();
+  const colors = useColors();
   const [sheet, setSheet] = useState<any>(null);
   const [quiz, setQuiz] = useState<any>(null);
   const [editedAnswers, setEditedAnswers] = useState<Record<string, string>>({});
@@ -40,16 +41,16 @@ export default function ScanResultScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-        <ActivityIndicator color={Colors.accent} size="large" />
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+        <ActivityIndicator color={colors.accent} size="large" />
       </View>
     );
   }
 
   if (!sheet || !quiz) {
     return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-        <Text style={styles.emptyText}>Result not found</Text>
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+        <Text style={[styles.emptyText, { color: colors.textMuted }]}>Result not found</Text>
       </View>
     );
   }
@@ -69,9 +70,9 @@ export default function ScanResultScreen() {
   const percentage = totalItems > 0 ? Math.round((score / totalItems) * 100) : 0;
 
   const getScoreColor = () => {
-    if (percentage >= 80) return Colors.success;
-    if (percentage >= 50) return Colors.warning;
-    return Colors.error;
+    if (percentage >= 80) return colors.success;
+    if (percentage >= 50) return colors.warning;
+    return colors.error;
   };
 
   const scoreColor = getScoreColor();
@@ -102,52 +103,52 @@ export default function ScanResultScreen() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.background }]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={22} color={Colors.textPrimary} />
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </Pressable>
         <View style={styles.headerInfo}>
-          <Text style={styles.title}>Scan Result</Text>
-          <Text style={styles.subtitle}>{quiz.title}</Text>
+          <Text style={[styles.title, { color: colors.textPrimary }]}>Scan Result</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{quiz.title}</Text>
         </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Student banner */}
-        <Animated.View entering={FadeInDown.duration(400)} style={styles.studentBanner}>
-          <Ionicons name="person" size={14} color={Colors.accent} />
-          <Text style={styles.studentName}>{sheet.studentName}</Text>
-          {sheet.lrn ? <Text style={styles.studentLrn}>LRN: {sheet.lrn}</Text> : null}
+        <Animated.View entering={FadeInDown.duration(400)} style={[styles.studentBanner, { backgroundColor: colors.accentDim, borderColor: colors.accent }]}>
+          <Ionicons name="person" size={14} color={colors.accent} />
+          <Text style={[styles.studentName, { color: colors.accent }]}>{sheet.studentName}</Text>
+          {sheet.lrn ? <Text style={[styles.studentLrn, { color: colors.accent }]}>LRN: {sheet.lrn}</Text> : null}
         </Animated.View>
 
         {/* Score card */}
-        <Animated.View entering={FadeInDown.duration(400).delay(100)} style={styles.scoreCard}>
+        <Animated.View entering={FadeInDown.duration(400).delay(100)} style={[styles.scoreCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={[styles.scoreRing, { borderColor: scoreColor }]}>
             <Text style={[styles.scoreNum, { color: scoreColor }]}>{score}</Text>
-            <Text style={styles.scoreOutOf}>of {totalItems}</Text>
+            <Text style={[styles.scoreOutOf, { color: colors.textMuted }]}>of {totalItems}</Text>
           </View>
           <View style={styles.statsRow}>
-            <View style={[styles.statPill, { borderColor: Colors.success }]}>
-              <Ionicons name="checkmark-circle" size={14} color={Colors.success} />
-              <Text style={[styles.statText, { color: Colors.success }]}>{score}</Text>
+            <View style={[styles.statPill, { borderColor: colors.success, backgroundColor: colors.surfaceElevated }]}>
+              <Ionicons name="checkmark-circle" size={14} color={colors.success} />
+              <Text style={[styles.statText, { color: colors.success }]}>{score}</Text>
             </View>
-            <View style={[styles.statPill, { borderColor: Colors.error }]}>
-              <Ionicons name="close-circle" size={14} color={Colors.error} />
-              <Text style={[styles.statText, { color: Colors.error }]}>{totalItems - score}</Text>
+            <View style={[styles.statPill, { borderColor: colors.error, backgroundColor: colors.surfaceElevated }]}>
+              <Ionicons name="close-circle" size={14} color={colors.error} />
+              <Text style={[styles.statText, { color: colors.error }]}>{totalItems - score}</Text>
             </View>
-            <View style={[styles.statPill, { borderColor: scoreColor }]}>
+            <View style={[styles.statPill, { borderColor: scoreColor, backgroundColor: colors.surfaceElevated }]}>
               <Text style={[styles.statText, { color: scoreColor }]}>{percentage}%</Text>
             </View>
           </View>
           {hasEdits && (
-            <Text style={styles.editedHint}>Score updated based on your edits</Text>
+            <Text style={[styles.editedHint, { color: colors.warning }]}>Score updated based on your edits</Text>
           )}
         </Animated.View>
 
         {/* Question breakdown */}
         <View style={styles.sectionLabel}>
-          <Text style={styles.sectionLabelText}>Answers (tap to edit)</Text>
+          <Text style={[styles.sectionLabelText, { color: colors.textSecondary }]}>Answers (tap to edit)</Text>
         </View>
 
         {Array.from({ length: totalItems }, (_, i) => i + 1).map((num, index) => {
@@ -160,10 +161,10 @@ export default function ScanResultScreen() {
             <Animated.View
               key={num}
               entering={FadeInDown.duration(250).delay(Math.min(200 + index * 20, 500))}
-              style={styles.questionRow}
+              style={[styles.questionRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
             >
               <View style={styles.questionNum}>
-                <Text style={[styles.questionNumText, { color: isCorrect ? Colors.success : Colors.error }]}>
+                <Text style={[styles.questionNumText, { color: isCorrect ? colors.success : colors.error }]}>
                   {num}
                 </Text>
               </View>
@@ -173,24 +174,24 @@ export default function ScanResultScreen() {
                   const isCorrectChoice = correctAnswer === choice;
                   const isWrong = isStudentAnswer && !isCorrect;
 
-                  let borderColor = Colors.border;
-                  let bg = Colors.surfaceElevated;
-                  let textColor = Colors.textMuted;
+                  let borderColor = colors.border;
+                  let bg = colors.surfaceElevated;
+                  let textColor = colors.textMuted;
 
                   if (isCorrectChoice) {
-                    borderColor = Colors.success;
-                    bg = Colors.successDim;
-                    textColor = Colors.success;
+                    borderColor = colors.success;
+                    bg = colors.successDim;
+                    textColor = colors.success;
                   }
                   if (isWrong) {
-                    borderColor = Colors.error;
-                    bg = Colors.errorDim;
-                    textColor = Colors.error;
+                    borderColor = colors.error;
+                    bg = colors.errorDim;
+                    textColor = colors.error;
                   }
                   if (isStudentAnswer && isCorrect) {
-                    borderColor = Colors.success;
-                    bg = Colors.successDim;
-                    textColor = Colors.success;
+                    borderColor = colors.success;
+                    bg = colors.successDim;
+                    textColor = colors.success;
                   }
 
                   return (
@@ -207,7 +208,7 @@ export default function ScanResultScreen() {
                         {choice}
                       </Text>
                       {isCorrectChoice && !isStudentAnswer && (
-                        <View style={styles.correctDot} />
+                        <View style={[styles.correctDot, { backgroundColor: colors.success }]} />
                       )}
                     </Pressable>
                   );
@@ -216,7 +217,7 @@ export default function ScanResultScreen() {
               <Ionicons
                 name={isCorrect ? "checkmark-circle" : "close-circle"}
                 size={18}
-                color={isCorrect ? Colors.success : Colors.error}
+                color={isCorrect ? colors.success : colors.error}
               />
             </Animated.View>
           );
@@ -226,22 +227,23 @@ export default function ScanResultScreen() {
       </ScrollView>
 
       {/* Bottom save bar */}
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 12 }]}>
+      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 12, borderColor: colors.border, backgroundColor: colors.surface }]}>
         <Pressable
           onPress={handleSave}
           disabled={!hasEdits || saving}
           style={({ pressed }) => [
             styles.saveBtn,
+            { backgroundColor: colors.accent, shadowColor: colors.accent },
             pressed && { opacity: 0.8 },
             (!hasEdits || saving) && { opacity: 0.5 },
           ]}
         >
           {saving ? (
-            <ActivityIndicator color={Colors.background} />
+            <ActivityIndicator color={colors.background} />
           ) : (
             <>
-              <Ionicons name="checkmark" size={20} color={Colors.background} />
-              <Text style={styles.saveBtnText}>
+              <Ionicons name="checkmark" size={20} color={colors.background} />
+              <Text style={[styles.saveBtnText, { color: colors.background }]}>
                 Save Changes ({score}/{totalItems})
               </Text>
             </>
@@ -255,7 +257,6 @@ export default function ScanResultScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
   center: {
     alignItems: "center",
@@ -272,9 +273,7 @@ const styles = StyleSheet.create({
   backBtn: {
     padding: 8,
     borderRadius: 12,
-    backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   headerInfo: {
     flex: 1,
@@ -282,13 +281,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 20,
     fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
     letterSpacing: -0.3,
   },
   subtitle: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
     marginTop: 2,
   },
   content: {
@@ -300,31 +297,25 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: Colors.accentDim,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderWidth: 1,
-    borderColor: Colors.accent,
   },
   studentName: {
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.accent,
     flex: 1,
   },
   studentLrn: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
-    color: Colors.accent,
     opacity: 0.7,
   },
   scoreCard: {
-    backgroundColor: Colors.surface,
     borderRadius: 16,
     padding: 20,
     borderWidth: 1,
-    borderColor: Colors.border,
     alignItems: "center",
     gap: 14,
   },
@@ -344,7 +335,6 @@ const styles = StyleSheet.create({
   scoreOutOf: {
     fontSize: 11,
     fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
   },
   statsRow: {
     flexDirection: "row",
@@ -358,7 +348,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
     borderWidth: 1,
-    backgroundColor: Colors.surfaceElevated,
   },
   statText: {
     fontSize: 13,
@@ -367,7 +356,6 @@ const styles = StyleSheet.create({
   editedHint: {
     fontSize: 11,
     fontFamily: "Inter_400Regular",
-    color: Colors.warning,
   },
   sectionLabel: {
     paddingTop: 4,
@@ -375,20 +363,17 @@ const styles = StyleSheet.create({
   sectionLabelText: {
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.textSecondary,
     textTransform: "uppercase",
     letterSpacing: 1,
   },
   questionRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.surface,
     borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 12,
     gap: 12,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   questionNum: {
     width: 28,
@@ -422,24 +407,19 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: Colors.success,
   },
   bottomBar: {
     paddingHorizontal: 20,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surface,
   },
   saveBtn: {
-    backgroundColor: Colors.accent,
     borderRadius: 16,
     paddingVertical: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
-    shadowColor: Colors.accent,
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 16,
     shadowOpacity: 0.3,
@@ -448,11 +428,9 @@ const styles = StyleSheet.create({
   saveBtnText: {
     fontSize: 16,
     fontFamily: "Inter_700Bold",
-    color: Colors.background,
   },
   emptyText: {
     fontSize: 14,
     fontFamily: "Inter_500Medium",
-    color: Colors.textMuted,
   },
 });

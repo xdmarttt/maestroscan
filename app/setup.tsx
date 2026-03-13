@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import Colors from "@/constants/colors";
+import { useColors } from "@/lib/theme-context";
 import {
   loadQuiz,
   saveQuiz,
@@ -49,23 +49,38 @@ function QuestionEditor({
   letters: readonly string[];
   onChange: (q: QuizQuestion) => void;
 }) {
+  const colors = useColors();
   return (
     <Animated.View
       entering={FadeInDown.duration(400).delay(index * 60)}
-      style={styles.questionCard}
+      style={[
+        styles.questionCard,
+        { backgroundColor: colors.surface, borderColor: colors.border },
+      ]}
     >
-      <Text style={styles.questionLabel}>Question {question.id}</Text>
+      <Text style={[styles.questionLabel, { color: colors.accent }]}>
+        Question {question.id}
+      </Text>
       <TextInput
-        style={styles.textInput}
+        style={[
+          styles.textInput,
+          {
+            backgroundColor: colors.surfaceElevated,
+            borderColor: colors.border,
+            color: colors.textPrimary,
+          },
+        ]}
         value={question.text}
         onChangeText={(t) => onChange({ ...question, text: t })}
         placeholder="Enter question text..."
-        placeholderTextColor={Colors.textMuted}
+        placeholderTextColor={colors.textMuted}
         multiline
         returnKeyType="done"
         blurOnSubmit
       />
-      <Text style={styles.answerLabel}>Correct Answer</Text>
+      <Text style={[styles.answerLabel, { color: colors.textSecondary }]}>
+        Correct Answer
+      </Text>
       <View style={styles.choiceRow}>
         {letters.map((letter) => (
           <Pressable
@@ -76,14 +91,22 @@ function QuestionEditor({
             }}
             style={({ pressed }) => [
               styles.choiceBubble,
-              question.correct === letter && styles.choiceBubbleSelected,
+              {
+                borderColor: colors.border,
+                backgroundColor: colors.surfaceElevated,
+              },
+              question.correct === letter && {
+                borderColor: colors.accent,
+                backgroundColor: colors.accentDim,
+              },
               pressed && { opacity: 0.75 },
             ]}
           >
             <Text
               style={[
                 styles.choiceLetter,
-                question.correct === letter && styles.choiceLetterSelected,
+                { color: colors.textMuted },
+                question.correct === letter && { color: colors.accent },
               ]}
             >
               {letter}
@@ -105,9 +128,12 @@ function SimpleRow({
   letters: readonly string[];
   onChange: (q: QuizQuestion) => void;
 }) {
+  const colors = useColors();
   return (
     <View style={styles.simpleRow}>
-      <Text style={styles.simpleNum}>{question.id}.</Text>
+      <Text style={[styles.simpleNum, { color: colors.textSecondary }]}>
+        {question.id}.
+      </Text>
       {letters.map((letter) => (
         <Pressable
           key={letter}
@@ -117,14 +143,22 @@ function SimpleRow({
           }}
           style={({ pressed }) => [
             styles.simpleBubble,
-            question.correct === letter && styles.simpleBubbleSelected,
+            {
+              borderColor: colors.border,
+              backgroundColor: colors.surfaceElevated,
+            },
+            question.correct === letter && {
+              borderColor: colors.accent,
+              backgroundColor: colors.accentDim,
+            },
             pressed && { opacity: 0.75 },
           ]}
         >
           <Text
             style={[
               styles.simpleLetter,
-              question.correct === letter && styles.simpleLetterSelected,
+              { color: colors.textMuted },
+              question.correct === letter && { color: colors.accent },
             ]}
           >
             {letter}
@@ -137,6 +171,7 @@ function SimpleRow({
 
 export default function SetupScreen() {
   const insets = useSafeAreaInsets();
+  const colors = useColors();
   const [questions, setQuestions] = useState<QuizQuestion[]>(DEFAULT_QUIZ.questions);
   const [choiceCount, setChoiceCount] = useState<4 | 5>(DEFAULT_QUIZ.choiceCount);
   const [quizId, setQuizId] = useState(DEFAULT_QUIZ.id);
@@ -220,22 +255,26 @@ export default function SetupScreen() {
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
   return (
-    <View style={[styles.container, { paddingTop: topPad }]}>
+    <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
           style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
         >
-          <Ionicons name="chevron-back" size={24} color={Colors.textPrimary} />
+          <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
         </Pressable>
-        <Text style={styles.title}>Quiz Setup</Text>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>Quiz Setup</Text>
         <Pressable
           onPress={navigateToSheet}
-          style={({ pressed }) => [styles.sheetBtn, pressed && { opacity: 0.6 }]}
+          style={({ pressed }) => [
+            styles.sheetBtn,
+            { backgroundColor: colors.accentDim, borderColor: colors.accent },
+            pressed && { opacity: 0.6 },
+          ]}
         >
-          <Ionicons name="document-outline" size={20} color={Colors.accent} />
-          <Text style={styles.sheetBtnText}>Sheet</Text>
+          <Ionicons name="document-outline" size={20} color={colors.accent} />
+          <Text style={[styles.sheetBtnText, { color: colors.accent }]}>Sheet</Text>
         </Pressable>
       </View>
 
@@ -243,16 +282,21 @@ export default function SetupScreen() {
       <View style={styles.configBar}>
         {/* Question count stepper */}
         <View style={styles.configItem}>
-          <Text style={styles.configLabel}>Questions</Text>
-          <View style={styles.stepper}>
+          <Text style={[styles.configLabel, { color: colors.textSecondary }]}>Questions</Text>
+          <View
+            style={[
+              styles.stepper,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
             <Pressable
               onPress={() => { Haptics.selectionAsync(); setQuestionCount(questionCount - 1); }}
               style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }]}
             >
-              <Ionicons name="remove" size={18} color={Colors.textPrimary} />
+              <Ionicons name="remove" size={18} color={colors.textPrimary} />
             </Pressable>
             <TextInput
-              style={styles.stepValue}
+              style={[styles.stepValue, { color: colors.textPrimary }]}
               value={String(questionCount)}
               onChangeText={(t) => {
                 const n = parseInt(t, 10);
@@ -266,19 +310,23 @@ export default function SetupScreen() {
               onPress={() => { Haptics.selectionAsync(); setQuestionCount(questionCount + 1); }}
               style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }]}
             >
-              <Ionicons name="add" size={18} color={Colors.textPrimary} />
+              <Ionicons name="add" size={18} color={colors.textPrimary} />
             </Pressable>
           </View>
         </View>
 
         {/* Choice count toggle */}
         <View style={styles.configItem}>
-          <Text style={styles.configLabel}>Choices</Text>
+          <Text style={[styles.configLabel, { color: colors.textSecondary }]}>Choices</Text>
           <Pressable
             onPress={handleChoiceToggle}
-            style={({ pressed }) => [styles.choiceToggle, pressed && { opacity: 0.6 }]}
+            style={({ pressed }) => [
+              styles.choiceToggle,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+              pressed && { opacity: 0.6 },
+            ]}
           >
-            <Text style={styles.choiceToggleText}>
+            <Text style={[styles.choiceToggleText, { color: colors.accent }]}>
               A–{choiceCount === 4 ? "D" : "E"}
             </Text>
           </Pressable>
@@ -286,19 +334,23 @@ export default function SetupScreen() {
 
         {/* Students button */}
         <View style={[styles.configItem, { marginLeft: "auto" }]}>
-          <Text style={styles.configLabel}>Students</Text>
+          <Text style={[styles.configLabel, { color: colors.textSecondary }]}>Students</Text>
           <Pressable
             onPress={() => router.push("/students")}
-            style={({ pressed }) => [styles.choiceToggle, pressed && { opacity: 0.6 }]}
+            style={({ pressed }) => [
+              styles.choiceToggle,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+              pressed && { opacity: 0.6 },
+            ]}
           >
-            <Text style={styles.choiceToggleText}>
+            <Text style={[styles.choiceToggleText, { color: colors.accent }]}>
               {students.length || "0"}
             </Text>
           </Pressable>
         </View>
       </View>
 
-      <Text style={styles.subtitle}>
+      <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
         {simpleMode
           ? `Set the answer key for ${questionCount} questions.`
           : `Set ${questionCount} question${questionCount > 1 ? "s" : ""} and mark the correct answer.`}
@@ -330,13 +382,26 @@ export default function SetupScreen() {
       </ScrollView>
 
       {/* Save button */}
-      <View style={[styles.footer, { paddingBottom: bottomPad + 16 }]}>
+      <View
+        style={[
+          styles.footer,
+          {
+            paddingBottom: bottomPad + 16,
+            backgroundColor: colors.surface,
+            borderColor: colors.border,
+          },
+        ]}
+      >
         <Pressable
           onPress={handleSave}
-          style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.85 }]}
+          style={({ pressed }) => [
+            styles.saveBtn,
+            { backgroundColor: colors.accent },
+            pressed && { opacity: 0.85 },
+          ]}
         >
-          <Ionicons name="checkmark-circle" size={20} color={Colors.background} />
-          <Text style={styles.saveBtnText}>Save & Go Back</Text>
+          <Ionicons name="checkmark-circle" size={20} color={colors.background} />
+          <Text style={[styles.saveBtnText, { color: colors.background }]}>Save & Go Back</Text>
         </Pressable>
       </View>
 
@@ -347,7 +412,6 @@ export default function SetupScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
   header: {
     flexDirection: "row",
@@ -363,15 +427,12 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 20,
     fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
   },
   sheetBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: Colors.accentDim,
     borderWidth: 1,
-    borderColor: Colors.accent,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -379,7 +440,6 @@ const styles = StyleSheet.create({
   sheetBtnText: {
     fontSize: 13,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.accent,
   },
   configBar: {
     flexDirection: "row",
@@ -394,17 +454,14 @@ const styles = StyleSheet.create({
   configLabel: {
     fontSize: 11,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.textSecondary,
     textTransform: "uppercase",
     letterSpacing: 0.8,
   },
   stepper: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: Colors.surface,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: Colors.border,
   },
   stepBtn: {
     paddingHorizontal: 10,
@@ -415,26 +472,21 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 16,
     fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
     paddingVertical: 6,
   },
   choiceToggle: {
-    backgroundColor: Colors.surface,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: Colors.border,
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
   choiceToggleText: {
     fontSize: 15,
     fontFamily: "Inter_700Bold",
-    color: Colors.accent,
   },
   subtitle: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
     paddingHorizontal: 20,
     marginBottom: 8,
   },
@@ -446,27 +498,21 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   questionCard: {
-    backgroundColor: Colors.surface,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: Colors.border,
     gap: 10,
   },
   questionLabel: {
     fontSize: 12,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.accent,
     textTransform: "uppercase",
     letterSpacing: 1,
   },
   textInput: {
-    backgroundColor: Colors.surfaceElevated,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: Colors.border,
     padding: 12,
-    color: Colors.textPrimary,
     fontFamily: "Inter_400Regular",
     fontSize: 14,
     minHeight: 44,
@@ -474,7 +520,6 @@ const styles = StyleSheet.create({
   answerLabel: {
     fontSize: 12,
     fontFamily: "Inter_500Medium",
-    color: Colors.textSecondary,
   },
   choiceRow: {
     flexDirection: "row",
@@ -485,22 +530,12 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 22,
     borderWidth: 2,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surfaceElevated,
     alignItems: "center",
     justifyContent: "center",
-  },
-  choiceBubbleSelected: {
-    borderColor: Colors.accent,
-    backgroundColor: Colors.accentDim,
   },
   choiceLetter: {
     fontSize: 16,
     fontFamily: "Inter_700Bold",
-    color: Colors.textMuted,
-  },
-  choiceLetterSelected: {
-    color: Colors.accent,
   },
   // Simple mode (>10 questions)
   simpleRow: {
@@ -513,7 +548,6 @@ const styles = StyleSheet.create({
     width: 32,
     fontSize: 14,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.textSecondary,
     textAlign: "right",
     marginRight: 4,
   },
@@ -522,22 +556,12 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     borderWidth: 2,
-    borderColor: Colors.border,
-    backgroundColor: Colors.surfaceElevated,
     alignItems: "center",
     justifyContent: "center",
-  },
-  simpleBubbleSelected: {
-    borderColor: Colors.accent,
-    backgroundColor: Colors.accentDim,
   },
   simpleLetter: {
     fontSize: 14,
     fontFamily: "Inter_700Bold",
-    color: Colors.textMuted,
-  },
-  simpleLetterSelected: {
-    color: Colors.accent,
   },
   footer: {
     position: "absolute",
@@ -546,12 +570,9 @@ const styles = StyleSheet.create({
     right: 0,
     paddingHorizontal: 16,
     paddingTop: 12,
-    backgroundColor: Colors.surface,
     borderTopWidth: 1,
-    borderColor: Colors.border,
   },
   saveBtn: {
-    backgroundColor: Colors.accent,
     borderRadius: 14,
     paddingVertical: 15,
     flexDirection: "row",
@@ -562,6 +583,5 @@ const styles = StyleSheet.create({
   saveBtnText: {
     fontSize: 16,
     fontFamily: "Inter_700Bold",
-    color: Colors.background,
   },
 });

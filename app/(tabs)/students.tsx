@@ -11,7 +11,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { Ionicons } from "@expo/vector-icons";
-import Colors from "@/constants/colors";
+import { useColors } from "@/lib/theme-context";
 import { getAllStudents } from "@/lib/queries";
 
 interface StudentItem {
@@ -26,6 +26,7 @@ interface StudentItem {
 
 export default function StudentsTab() {
   const insets = useSafeAreaInsets();
+  const colors = useColors();
   const [students, setStudents] = useState<StudentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -50,9 +51,18 @@ export default function StudentsTab() {
 
   const renderStudent = ({ item, index }: { item: StudentItem; index: number }) => (
     <Animated.View entering={FadeInDown.duration(300).delay(index * 30)}>
-      <View style={styles.card}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
+      <View
+        style={[
+          styles.card,
+          {
+            backgroundColor: colors.surface,
+            borderColor: colors.border,
+            shadowColor: colors.cardShadow,
+          },
+        ]}
+      >
+        <View style={[styles.avatar, { backgroundColor: colors.accentDim }]}>
+          <Text style={[styles.avatarText, { color: colors.accent }]}>
             {item.full_name
               .split(" ")
               .map((w) => w[0])
@@ -62,36 +72,58 @@ export default function StudentsTab() {
           </Text>
         </View>
         <View style={styles.info}>
-          <Text style={styles.name}>{item.full_name}</Text>
-          <Text style={styles.detail}>
+          <Text style={[styles.name, { color: colors.textPrimary }]}>{item.full_name}</Text>
+          <Text style={[styles.detail, { color: colors.textMuted }]}>
             LRN: {item.lrn}
             {item.grade_level ? ` · Grade ${item.grade_level}` : ""}
             {item.section ? ` · ${item.section}` : ""}
           </Text>
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: item.status === "active" ? Colors.successDim : Colors.errorDim }]}>
-          <View style={[styles.statusDot, { backgroundColor: item.status === "active" ? Colors.success : Colors.error }]} />
+        <View
+          style={[
+            styles.statusBadge,
+            {
+              backgroundColor:
+                item.status === "active" ? colors.successDim : colors.errorDim,
+            },
+          ]}
+        >
+          <View
+            style={[
+              styles.statusDot,
+              {
+                backgroundColor:
+                  item.status === "active" ? colors.success : colors.error,
+              },
+            ]}
+          />
         </View>
       </View>
     </Animated.View>
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Students</Text>
-        <Text style={styles.subtitle}>{students.length} total students</Text>
+        <Text style={[styles.title, { color: colors.textPrimary }]}>Students</Text>
+        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+          {students.length} total students
+        </Text>
       </View>
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={Colors.accent} size="large" />
+          <ActivityIndicator color={colors.accent} size="large" />
         </View>
       ) : students.length === 0 ? (
         <View style={styles.center}>
-          <Ionicons name="people-outline" size={48} color={Colors.textMuted} />
-          <Text style={styles.emptyText}>No students yet</Text>
-          <Text style={styles.emptySubtext}>Add students from the web dashboard</Text>
+          <View style={[styles.emptyIcon, { backgroundColor: colors.successDim }]}>
+            <Ionicons name="people-outline" size={32} color={colors.success} />
+          </View>
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No students yet</Text>
+          <Text style={[styles.emptySubtext, { color: colors.textMuted }]}>
+            Add students from the web dashboard
+          </Text>
         </View>
       ) : (
         <FlatList
@@ -99,7 +131,9 @@ export default function StudentsTab() {
           keyExtractor={(item) => item.id}
           renderItem={renderStudent}
           contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
+          }
         />
       )}
     </View>
@@ -109,7 +143,6 @@ export default function StudentsTab() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
   header: {
     paddingHorizontal: 20,
@@ -119,13 +152,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 26,
     fontFamily: "Inter_700Bold",
-    color: Colors.textPrimary,
     letterSpacing: -0.5,
   },
   subtitle: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.textSecondary,
     marginTop: 4,
   },
   center: {
@@ -134,33 +165,41 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 12,
   },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
   list: {
     padding: 20,
     paddingTop: 8,
     gap: 8,
   },
   card: {
-    backgroundColor: Colors.surface,
     borderRadius: 14,
     padding: 14,
     borderWidth: 1,
-    borderColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 4,
+    shadowOpacity: 1,
+    elevation: 1,
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: Colors.surfaceElevated,
+    width: 42,
+    height: 42,
+    borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
   },
   avatarText: {
     fontSize: 14,
     fontFamily: "Inter_700Bold",
-    color: Colors.accent,
   },
   info: {
     flex: 1,
@@ -169,12 +208,10 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.textPrimary,
   },
   detail: {
     fontSize: 12,
     fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
   },
   statusBadge: {
     width: 24,
@@ -191,11 +228,9 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
     fontFamily: "Inter_600SemiBold",
-    color: Colors.textSecondary,
   },
   emptySubtext: {
     fontSize: 13,
     fontFamily: "Inter_400Regular",
-    color: Colors.textMuted,
   },
 });
