@@ -256,6 +256,73 @@ export async function saveAnswerSheet(params: {
   return { data, error: null };
 }
 
+export async function getAnswerSheetByQuizAndStudent(quizId: string, studentId: string) {
+  const { data, error } = await supabase
+    .from("answer_sheets")
+    .select("id, raw_score, total_points, percentage, answers, scanned_at")
+    .eq("quiz_id", quizId)
+    .eq("student_id", studentId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("getAnswerSheetByQuizAndStudent error:", error);
+    return null;
+  }
+  return data;
+}
+
+export async function getAnswerSheetById(sheetId: string) {
+  const { data, error } = await supabase
+    .from("answer_sheets")
+    .select(
+      "id, quiz_id, student_id, answers, raw_score, total_points, percentage, status, scanned_at, students(full_name, lrn)"
+    )
+    .eq("id", sheetId)
+    .single();
+
+  if (error || !data) return null;
+
+  const student = data.students as { full_name: string | null; lrn: string | null } | null;
+  return {
+    id: data.id,
+    quizId: data.quiz_id,
+    studentId: data.student_id,
+    studentName: student?.full_name ?? "Unknown",
+    lrn: student?.lrn ?? "",
+    answers: (data.answers as Record<string, string>) ?? {},
+    rawScore: data.raw_score ?? 0,
+    totalPoints: data.total_points ?? 0,
+    percentage: data.percentage ?? 0,
+    status: data.status,
+    scannedAt: data.scanned_at,
+  };
+}
+
+export async function updateAnswerSheet(params: {
+  sheetId: string;
+  answers: Record<string, string>;
+  rawScore: number;
+  totalPoints: number;
+  percentage: number;
+}) {
+  const { error } = await supabase
+    .from("answer_sheets")
+    .update({
+      answers: params.answers,
+      raw_score: params.rawScore,
+      total_points: params.totalPoints,
+      percentage: params.percentage,
+      graded_at: new Date().toISOString(),
+    })
+    .eq("id", params.sheetId);
+
+  if (error) {
+    console.error("updateAnswerSheet error:", error);
+    return { error: error.message };
+  }
+  return { error: null };
+}
+
 // ─── Dashboard Stats ────────────────────────────────────────────────────────
 
 export async function getDashboardStats() {

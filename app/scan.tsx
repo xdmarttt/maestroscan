@@ -6,7 +6,6 @@ import {
   Pressable,
   Platform,
   Dimensions,
-  Alert,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
@@ -31,6 +30,12 @@ import Colors from "@/constants/colors";
 import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner";
 import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
 import { detectAndScan, warmupOpenCV } from "@/lib/scan-offline";
+import { useAuth } from "@/lib/auth-context";
+import {
+  getStudentsByClass,
+  getAnswerSheetByQuizAndStudent,
+  saveAnswerSheet,
+} from "@/lib/queries";
 import { useFrameProcessor } from "react-native-vision-camera";
 import { useResizePlugin } from "vision-camera-resize-plugin";
 import { useRunOnJS } from "react-native-worklets-core";
@@ -60,6 +65,19 @@ async function preparePhoto(
   return result.base64 ?? null;
 }
 
+// Match barcode value against enrolled students
+function matchStudent(barcode: string, students: any[]): any | null {
+  const byAccessCode = students.find((s) => s.access_code === barcode);
+  if (byAccessCode) return byAccessCode;
+  const byLrn = students.find((s) => s.lrn === barcode);
+  if (byLrn) return byLrn;
+  const idx = Number(barcode);
+  if (!isNaN(idx) && idx >= 1 && idx <= students.length) {
+    return students[idx - 1];
+  }
+  return null;
+}
+
 // Corner viewfinder boxes (like ZipGrade) — large squares with thick borders
 const GUIDE_SIZE = 100;
 const GUIDE_INSET = 8;
@@ -71,14 +89,17 @@ export default function ScannerScreen() {
   // Optional params from quiz detail screen
   const params = useLocalSearchParams<{
     quizId?: string;
+    classId?: string;
     answerKey?: string;
     totalPoints?: string;
     choiceCount?: string;
     quizTitle?: string;
   }>();
 
+  const { profile } = useAuth();
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
+  const classStudentsRef = useRef<any[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [scanDone, setScanDone] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
@@ -94,6 +115,9 @@ export default function ScannerScreen() {
     studentName: string | null;
     studentId: string | null;
     scannedImage: string;
+    saved?: boolean;
+    saveStatus?: "saving" | "saved" | "not_found" | "overwrite_prompt";
+    overwriteInfo?: { name: string; oldScore: string };
   } | null>(null);
   const scanResultRef = useRef<boolean>(false);
   const cameraRef = useRef<any>(null);
@@ -281,20 +305,60 @@ export default function ScannerScreen() {
       });
       setIsScanning(false);
 
-      // Enrich result with student name from roster (lightweight, no OpenCV)
-      try {
-        let studentName: string | null = null;
-        if (barcode) {
-          try {
-            const roster = await loadRoster();
-            const idx = Number(barcode);
-            if (roster.students[idx]) studentName = roster.students[idx];
-          } catch { /* no roster */ }
-        }
-        if (studentName) {
-          setScanResult(prev => prev ? { ...prev, studentName } : prev);
-        }
-      } catch (e) { console.warn("[enrich] auto:", e); }
+      // Cloud-connected flow: match student against class roster + auto-save
+      if (params.classId && barcode && params.quizId && profile?.organization_id) {
+        try {
+          const matched = matchStudent(barcode, classStudentsRef.current);
+
+          if (!matched) {
+            setScanResult(prev => prev ? { ...prev, studentName: `Unknown (${barcode})`, saveStatus: "not_found" } : prev);
+          } else {
+            setScanResult(prev => prev ? { ...prev, studentName: matched.full_name, studentId: matched.id, saveStatus: "saving" } : prev);
+
+            const existing = await getAnswerSheetByQuizAndStudent(params.quizId, matched.id);
+
+            if (existing) {
+              // Show overwrite prompt inside popup
+              setScanResult(prev => prev ? {
+                ...prev,
+                saveStatus: "overwrite_prompt",
+                overwriteInfo: { name: matched.full_name, oldScore: `${existing.raw_score}/${existing.total_points}` },
+              } : prev);
+            } else {
+              // Auto-save
+              const answersMap: Record<string, string> = {};
+              result.answers.forEach((a: string, i: number) => { answersMap[String(i + 1)] = a; });
+              const { error: saveErr } = await saveAnswerSheet({
+                quizId: params.quizId!,
+                studentId: matched.id,
+                organizationId: profile!.organization_id!,
+                answers: answersMap,
+                rawScore: score,
+                totalPoints: total,
+                percentage: total > 0 ? Math.round((score / total) * 100) : 0,
+              });
+              if (!saveErr) {
+                setScanResult(prev => prev ? { ...prev, saved: true, saveStatus: "saved" } : prev);
+              }
+            }
+          }
+        } catch (e) { console.warn("[scan] student match/save error:", e); }
+      } else {
+        // Offline fallback: look up student name from local roster
+        try {
+          let studentName: string | null = null;
+          if (barcode) {
+            try {
+              const roster = await loadRoster();
+              const idx = Number(barcode);
+              if (roster.students[idx]) studentName = roster.students[idx];
+            } catch { /* no roster */ }
+          }
+          if (studentName) {
+            setScanResult(prev => prev ? { ...prev, studentName } : prev);
+          }
+        } catch (e) { console.warn("[enrich] auto:", e); }
+      }
     } catch (e) {
       console.error("[scan] triggerScan error:", e);
       isScanningRef.current = false;
@@ -363,6 +427,17 @@ export default function ScannerScreen() {
     }, [params.answerKey, params.choiceCount])
   );
 
+  // Pre-load class students for barcode matching (cloud-connected flow)
+  useFocusEffect(
+    useCallback(() => {
+      if (params.classId) {
+        getStudentsByClass(params.classId).then((students) => {
+          classStudentsRef.current = students;
+        });
+      }
+    }, [params.classId])
+  );
+
   useEffect(() => {
     scanLineY.value = withRepeat(
       withSequence(
@@ -402,15 +477,38 @@ export default function ScannerScreen() {
       params: {
         answers: JSON.stringify(scanResult.answers),
         questions: JSON.stringify(questions),
-        studentId: lastBarcodeRef.current ?? "",
+        studentId: scanResult.studentId ?? lastBarcodeRef.current ?? "",
         scannedImage: scanResult.scannedImage,
         quizId: params.quizId ?? "",
+        saved: scanResult.saved ? "true" : "false",
+        studentName: scanResult.studentName ?? "",
       },
     });
     scanResultRef.current = false;
     setScanResult(null);
     isScanningRef.current = false;
   }, [scanResult, questions, params.quizId]);
+
+  // Handle overwrite confirmation from popup
+  const handleOverwrite = useCallback(async () => {
+    if (!scanResult || !params.quizId || !profile?.organization_id) return;
+    setScanResult(prev => prev ? { ...prev, saveStatus: "saving" } : prev);
+    const answersMap: Record<string, string> = {};
+    scanResult.answers.forEach((a, i) => { answersMap[String(i + 1)] = a; });
+    const { error } = await saveAnswerSheet({
+      quizId: params.quizId,
+      studentId: scanResult.studentId!,
+      organizationId: profile.organization_id!,
+      answers: answersMap,
+      rawScore: scanResult.score,
+      totalPoints: scanResult.total,
+      percentage: scanResult.percentage,
+    });
+    if (!error) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setScanResult(prev => prev ? { ...prev, saved: true, saveStatus: "saved" } : prev);
+    }
+  }, [scanResult, params.quizId, profile]);
 
   const getScoreColor = (pct: number) => {
     if (pct >= 80) return Colors.success;
@@ -581,48 +679,117 @@ export default function ScannerScreen() {
       {scanResult && (
         <Animated.View entering={FadeIn.duration(200)} style={styles.popupBackdrop}>
           <Animated.View entering={ZoomIn.duration(300).delay(100)} style={styles.popupCard}>
-            <View style={[styles.popupScoreBadge, { backgroundColor: `${getScoreColor(scanResult.percentage)}15` }]}>
-              <Ionicons
-                name={scanResult.percentage >= 80 ? "checkmark-circle" : scanResult.percentage >= 50 ? "remove-circle" : "close-circle"}
-                size={28}
-                color={getScoreColor(scanResult.percentage)}
-              />
-            </View>
 
-            <Text style={[styles.popupScore, { color: getScoreColor(scanResult.percentage) }]}>
-              {scanResult.score} / {scanResult.total}
-            </Text>
-            <Text style={[styles.popupPercent, { color: getScoreColor(scanResult.percentage) }]}>
-              {scanResult.percentage}%
-            </Text>
-
-            {(scanResult.studentName || scanResult.studentId) && (
-              <View style={styles.popupStudentRow}>
-                <Ionicons name="person-outline" size={14} color={Colors.textSecondary} />
-                <Text style={styles.popupStudentName}>
-                  {scanResult.studentName
-                    ? `${scanResult.studentName} (ID: ${scanResult.studentId})`
-                    : `Student ID: ${scanResult.studentId}`}
+            {scanResult.saveStatus === "not_found" ? (
+              <>
+                {/* Error-only view for unrecognized student */}
+                <View style={[styles.popupScoreBadge, { backgroundColor: Colors.errorDim }]}>
+                  <Ionicons name="person-remove-outline" size={28} color={Colors.error} />
+                </View>
+                <Text style={styles.popupErrorTitle}>Student Not Found</Text>
+                <Text style={styles.popupErrorMsg}>
+                  The scanned barcode doesn't match any student enrolled in this class. Please check the answer sheet and try again.
                 </Text>
-              </View>
+                <View style={styles.popupButtons}>
+                  <Pressable
+                    onPress={handleScanNext}
+                    style={({ pressed }) => [styles.popupBtnPrimary, pressed && { opacity: 0.8 }]}
+                  >
+                    <MaterialCommunityIcons name="line-scan" size={18} color={Colors.background} />
+                    <Text style={styles.popupBtnPrimaryText}>Try Again</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <>
+                {/* Normal score view */}
+                <View style={[styles.popupScoreBadge, { backgroundColor: `${getScoreColor(scanResult.percentage)}15` }]}>
+                  <Ionicons
+                    name={scanResult.percentage >= 80 ? "checkmark-circle" : scanResult.percentage >= 50 ? "remove-circle" : "close-circle"}
+                    size={28}
+                    color={getScoreColor(scanResult.percentage)}
+                  />
+                </View>
+
+                <Text style={[styles.popupScore, { color: getScoreColor(scanResult.percentage) }]}>
+                  {scanResult.score} / {scanResult.total}
+                </Text>
+                <Text style={[styles.popupPercent, { color: getScoreColor(scanResult.percentage) }]}>
+                  {scanResult.percentage}%
+                </Text>
+
+                {(scanResult.studentName || scanResult.studentId) && (
+                  <View style={styles.popupStudentRow}>
+                    <Ionicons name="person-outline" size={14} color={Colors.textSecondary} />
+                    <Text style={styles.popupStudentName}>
+                      {scanResult.studentName
+                        ? scanResult.studentName
+                        : `Student ID: ${scanResult.studentId}`}
+                    </Text>
+                  </View>
+                )}
+
+                {scanResult.saveStatus === "saving" && (
+                  <View style={styles.popupStatusRow}>
+                    <Text style={[styles.popupStatusText, { color: Colors.textSecondary }]}>
+                      Saving...
+                    </Text>
+                  </View>
+                )}
+
+                {scanResult.saveStatus === "saved" && (
+                  <View style={styles.popupStatusRow}>
+                    <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
+                    <Text style={[styles.popupStatusText, { color: Colors.success }]}>
+                      Saved to cloud
+                    </Text>
+                  </View>
+                )}
+
+                {scanResult.saveStatus === "overwrite_prompt" && scanResult.overwriteInfo && (
+                  <View style={styles.popupOverwriteCard}>
+                    <View style={styles.popupStatusRow}>
+                      <Ionicons name="information-circle" size={16} color={Colors.warning} />
+                      <Text style={[styles.popupStatusText, { color: Colors.warning }]}>
+                        Existing result: {scanResult.overwriteInfo.oldScore}
+                      </Text>
+                    </View>
+                    <View style={styles.popupOverwriteActions}>
+                      <Pressable
+                        onPress={() => setScanResult(prev => prev ? { ...prev, saveStatus: undefined } : prev)}
+                        style={({ pressed }) => [styles.popupOverwriteBtn, pressed && { opacity: 0.7 }]}
+                      >
+                        <Text style={[styles.popupOverwriteBtnText, { color: Colors.textSecondary }]}>Keep Old</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={handleOverwrite}
+                        style={({ pressed }) => [styles.popupOverwriteBtn, styles.popupOverwriteBtnDanger, pressed && { opacity: 0.7 }]}
+                      >
+                        <Text style={[styles.popupOverwriteBtnText, { color: Colors.error }]}>Overwrite</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )}
+
+                <View style={styles.popupButtons}>
+                  <Pressable
+                    onPress={handleScanNext}
+                    style={({ pressed }) => [styles.popupBtnPrimary, pressed && { opacity: 0.8 }]}
+                  >
+                    <MaterialCommunityIcons name="line-scan" size={18} color={Colors.background} />
+                    <Text style={styles.popupBtnPrimaryText}>Scan Next</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleViewDetails}
+                    style={({ pressed }) => [styles.popupBtnSecondary, pressed && { opacity: 0.8 }]}
+                  >
+                    <Text style={styles.popupBtnSecondaryText}>View Details</Text>
+                    <Ionicons name="arrow-forward" size={16} color={Colors.accent} />
+                  </Pressable>
+                </View>
+              </>
             )}
 
-            <View style={styles.popupButtons}>
-              <Pressable
-                onPress={handleScanNext}
-                style={({ pressed }) => [styles.popupBtnPrimary, pressed && { opacity: 0.8 }]}
-              >
-                <MaterialCommunityIcons name="line-scan" size={18} color={Colors.background} />
-                <Text style={styles.popupBtnPrimaryText}>Scan Next</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleViewDetails}
-                style={({ pressed }) => [styles.popupBtnSecondary, pressed && { opacity: 0.8 }]}
-              >
-                <Text style={styles.popupBtnSecondaryText}>View Details</Text>
-                <Ionicons name="arrow-forward" size={16} color={Colors.accent} />
-              </Pressable>
-            </View>
           </Animated.View>
         </Animated.View>
       )}
@@ -892,5 +1059,61 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
     color: Colors.accent,
+  },
+  popupStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 2,
+  },
+  popupStatusText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
+  popupOverwriteCard: {
+    width: "100%",
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  popupOverwriteActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  popupOverwriteBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  popupOverwriteBtnDanger: {
+    borderColor: Colors.error,
+    backgroundColor: Colors.errorDim,
+  },
+  popupOverwriteBtnText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+  },
+  popupErrorTitle: {
+    fontSize: 20,
+    fontFamily: "Inter_700Bold",
+    color: Colors.error,
+    marginTop: 4,
+  },
+  popupErrorMsg: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: Colors.textSecondary,
+    textAlign: "center",
+    lineHeight: 19,
+    marginBottom: 4,
   },
 });

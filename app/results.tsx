@@ -191,13 +191,19 @@ export default function ResultsScreen() {
   const studentId = studentIdParam ?? null;
   const scannedImage = (params.scannedImage as string) || null;
   const quizId = (params.quizId as string) || null;
+  const studentNameParam = (params.studentName as string) || null;
+  const savedParam = (params.saved as string) === "true";
   const [studentName, setStudentName] = useState("");
   const [showImage, setShowImage] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState(savedParam);
 
-  // Look up student name from roster by ID
+  // Look up student name from roster by ID (skip if name already provided)
   useEffect(() => {
+    if (studentNameParam) {
+      setStudentName(studentNameParam);
+      return;
+    }
     if (!studentId) return;
     const numId = parseInt(studentId, 10);
     loadRoster().then((r) => {
@@ -207,7 +213,7 @@ export default function ResultsScreen() {
         setStudentName(`Student #${studentId}`);
       }
     });
-  }, [studentId]);
+  }, [studentId, studentNameParam]);
   const score = answers.filter((a, i) => a === questions[i]?.correct).length;
   const percentage = Math.round((score / questions.length) * 100);
 

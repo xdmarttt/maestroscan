@@ -45,6 +45,7 @@ function AuthGate() {
       <Stack.Screen name="class/[id]" options={{ presentation: "card" }} />
       <Stack.Screen name="quiz/[id]" options={{ presentation: "card" }} />
       <Stack.Screen name="answer-key" options={{ presentation: "card" }} />
+      <Stack.Screen name="scan-result" options={{ presentation: "card" }} />
     </Stack>
   );
 }
