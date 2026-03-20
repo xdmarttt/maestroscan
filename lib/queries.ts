@@ -326,7 +326,7 @@ export async function updateAnswerSheet(params: {
 // ─── Dashboard Stats ────────────────────────────────────────────────────────
 
 export async function getDashboardStats() {
-  const [studentsRes, quizzesRes, classesRes, pendingRes] = await Promise.all([
+  const [studentsRes, quizzesRes, classesRes] = await Promise.all([
     supabase
       .from("enrollments")
       .select("student_id", { count: "exact", head: true })
@@ -348,17 +348,11 @@ export async function getDashboardStats() {
       .from("classes")
       .select("id", { count: "exact", head: true })
       .eq("status" as any, "active"),
-
-    supabase
-      .from("answer_sheets")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "pending"),
   ]);
 
   return {
     totalStudents: studentsRes.count ?? 0,
     quizzesThisMonth: quizzesRes.count ?? 0,
     totalClasses: classesRes.count ?? 0,
-    pendingScans: pendingRes.count ?? 0,
   };
 }

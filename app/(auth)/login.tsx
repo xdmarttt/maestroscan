@@ -8,7 +8,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown, FadeIn } from "react-native-reanimated";
@@ -16,8 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme, useColors } from "@/lib/theme-context";
 
-const logoWhite = require("@/assets/images/logo-white.png");
-const logoBlack = require("@/assets/images/logo-black.png");
+import MaestroLogo from "@/components/MaestroLogo";
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -77,13 +75,9 @@ export default function LoginScreen() {
       <Animated.View entering={FadeInDown.duration(600)} style={styles.content}>
         <View style={styles.logoSection}>
           <View style={[styles.logoContainer, { backgroundColor: colors.accentDim }]}>
-            <Image
-              source={isDark ? logoWhite : logoBlack}
-              style={styles.logoImage}
-              resizeMode="contain"
-            />
+            <MaestroLogo size={52} />
           </View>
-          <Text style={[styles.appTitle, { color: colors.textPrimary }]}>MaestroGrade</Text>
+          <Text style={[styles.appTitle, { color: colors.textPrimary }]}>MaestroScan</Text>
           <Text style={[styles.appSubtitle, { color: colors.textSecondary }]}>
             Grade Like a Maestro
           </Text>
