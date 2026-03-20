@@ -313,7 +313,7 @@ export function drawSheetToCanvas(
       ctx.fillStyle = "#888";
       ctx.font = `${4.5 * S}px Arial`;
       ctx.textAlign = "center";
-      ctx.fillText("GradeSnap", (SHEET_W / 2) * S, (SHEET_H - 16) * S);
+      ctx.fillText("MaestroScan", (SHEET_W / 2) * S, (SHEET_H - 16) * S);
       ctx.font = `${4 * S}px Arial`;
       ctx.fillText(
         `${opts.questionCount} items · Do not reproduce without permission`,

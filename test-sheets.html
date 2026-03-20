@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>GradeSnap Test Sheets</title>
+<title>MaestroScan Test Sheets</title>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   @media print {
@@ -65,7 +65,7 @@
 <body>
 
 <div class="no-print">
-  <h1>GradeSnap Test Sheets</h1>
+  <h1>MaestroScan Test Sheets</h1>
   <p>10 / 20 / 30 / 40 / 50 / 60 / 70 / 80 / 90 / 100 questions (4 choices)</p>
   <p>Each sheet has prefilled answers with <strong>exactly 2 wrong</strong> (marked in answer key below each sheet)</p>
   <button onclick="window.print()">Print All Sheets</button>
@@ -209,7 +209,7 @@ function drawSheet(canvas, questionCount, choiceCount = 4) {
   ctx.fillStyle = '#000';
   ctx.font = `bold ${13 * s}px Arial`;
   ctx.textAlign = 'center';
-  ctx.fillText('GradeSnap', (SHEET_W / 2) * s, 38 * s);
+  ctx.fillText('MaestroScan', (SHEET_W / 2) * s, 38 * s);
 
   ctx.fillStyle = '#444';
   ctx.font = `${8 * s}px Arial`;

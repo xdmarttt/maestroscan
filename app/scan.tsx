@@ -521,7 +521,7 @@ export default function ScannerScreen() {
   const topPad = Platform.OS === "web" ? 67 : insets.top;
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const headerTitle = params.quizTitle ?? "GradeSnap";
+  const headerTitle = params.quizTitle ?? "MaestroScan";
 
   if (!permission) {
     return (
@@ -540,7 +540,7 @@ export default function ScannerScreen() {
           </View>
           <Text style={[styles.permissionTitle, { color: colors.textPrimary }]}>Camera Access Needed</Text>
           <Text style={[styles.permissionBody, { color: colors.textSecondary }]}>
-            GradeSnap uses your camera to scan answer sheets and calculate scores instantly.
+            MaestroScan uses your camera to scan answer sheets and calculate scores instantly.
           </Text>
           <Pressable
             onPress={requestPermission}

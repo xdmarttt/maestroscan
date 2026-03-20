@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>GradeSnap — Test Sheets (Auto-Filled)</title>
+<title>MaestroScan — Test Sheets (Auto-Filled)</title>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   @media print {
@@ -34,7 +34,7 @@
 <body>
 
 <div class="no-print header">
-  <h1>GradeSnap — Test Sheets (Auto-Filled)</h1>
+  <h1>MaestroScan — Test Sheets (Auto-Filled)</h1>
   <p>10 / 20 / 30 / 40 / 50 / 60 / 70 / 80 / 90 / 100 questions (4 choices)</p>
   <p>Each sheet has prefilled answers with <strong>exactly 2 wrong</strong> (marked in key below)</p>
   <button onclick="window.print()">Print All Sheets</button>
@@ -169,7 +169,7 @@ function drawSheet(canvas, questionCount, choiceCount) {
   ctx.fillStyle = '#999';
   ctx.font = `bold ${6 * S}px Arial`;
   ctx.textAlign = 'left';
-  ctx.fillText('GRADESNAP', (barX + 8) * S, (barY + 10) * S);
+  ctx.fillText('MAESTROSCAN', (barX + 8) * S, (barY + 10) * S);
 
   ctx.fillStyle = '#000';
   ctx.font = `bold ${14 * S}px Arial`;
@@ -293,7 +293,7 @@ function drawSheet(canvas, questionCount, choiceCount) {
   ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5 * S;
   ctx.beginPath(); ctx.moveTo(tableX * S, (SHEET_H - 22) * S); ctx.lineTo((tableX + tableW) * S, (SHEET_H - 22) * S); ctx.stroke();
   ctx.fillStyle = '#888'; ctx.font = `${4.5 * S}px Arial`; ctx.textAlign = 'center';
-  ctx.fillText(`GradeSnap · Q3 · ${formatDate()} · Test Quiz`, (SHEET_W / 2) * S, (SHEET_H - 16) * S);
+  ctx.fillText(`MaestroScan · Q3 · ${formatDate()} · Test Quiz`, (SHEET_W / 2) * S, (SHEET_H - 16) * S);
   ctx.font = `${4 * S}px Arial`;
   ctx.fillText(`${questionCount} items · ${questionCount} total points · Do not reproduce without permission`, (SHEET_W / 2) * S, (SHEET_H - 10) * S);
   ctx.textAlign = 'left';

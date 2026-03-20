@@ -80,7 +80,7 @@ export default function SheetScreen() {
 
           {/* Header bar — bordered */}
           <View style={styles.headerBar}>
-            <Text style={styles.brandText}>GRADESNAP</Text>
+            <Text style={styles.brandText}>MAESTROSCAN</Text>
             <Text style={styles.sheetTitle}>ANSWER SHEET</Text>
             <Text style={styles.sheetSubtitle}>
               {questions.length} Question{questions.length !== 1 ? "s" : ""} · {choiceCount} Choices

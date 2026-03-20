@@ -20,8 +20,8 @@ export interface StudentRoster {
   students: string[];
 }
 
-const QUIZ_KEY = "gradesnap:quiz_config";
-const ROSTER_KEY = "gradesnap:student_roster";
+const QUIZ_KEY = "maestroscan:quiz_config";
+const ROSTER_KEY = "maestroscan:student_roster";
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);

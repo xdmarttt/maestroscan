@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GradeSnap — Sheet Generator</title>
+<title>MaestroScan — Sheet Generator</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Inter', -apple-system, system-ui, sans-serif; background: #f0f0f0; }
@@ -77,7 +77,7 @@
 <body>
 <div class="app">
   <aside class="sidebar no-print">
-    <h1>GradeSnap</h1>
+    <h1>MaestroScan</h1>
     <p class="tagline">Answer Sheet Generator</p>
 
     <div class="form-group">
@@ -312,7 +312,7 @@ function drawSheet(canvas, opts) {
   ctx.fillStyle = '#999';
   ctx.font = `bold ${6 * S}px Arial`;
   ctx.textAlign = 'left';
-  ctx.fillText('GRADESNAP', (barX + 8) * S, (barY + 10) * S);
+  ctx.fillText('MAESTROSCAN', (barX + 8) * S, (barY + 10) * S);
 
   // Title
   ctx.fillStyle = '#000';
@@ -543,7 +543,7 @@ function drawSheet(canvas, opts) {
   ctx.fillStyle = '#888';
   ctx.font = `${4.5 * S}px Arial`;
   ctx.textAlign = 'center';
-  const footerParts = ['GradeSnap', opts.quarter, opts.dateStr, opts.quizTitle].filter(Boolean);
+  const footerParts = ['MaestroScan', opts.quarter, opts.dateStr, opts.quizTitle].filter(Boolean);
   ctx.fillText(footerParts.join(' · '), (SHEET_W / 2) * S, (SHEET_H - 16) * S);
   ctx.font = `${4 * S}px Arial`;
   ctx.fillText(opts.questionCount + ' items · ' + (opts.totalPoints || opts.questionCount) + ' total points · Do not reproduce without permission',

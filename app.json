@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "GradeSnap",
-    "slug": "my-app",
+    "name": "MaestroScan",
+    "slug": "maestroscan",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
+    "scheme": "maestroscan",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
@@ -15,18 +15,19 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.gradesnap.scanner",
+      "bundleIdentifier": "com.maestroscan.app",
+      "buildNumber": "1",
       "infoPlist": {
-        "NSCameraUsageDescription": "GradeSnap needs camera access to scan answer sheets.",
+        "NSCameraUsageDescription": "MaestroScan needs camera access to scan answer sheets.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.gradesnap.scanner",
+      "package": "com.maestroscan.app",
+      "versionCode": 1,
       "permissions": [
         "CAMERA",
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.CAMERA"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#0A1628",
@@ -42,14 +43,14 @@
       [
         "expo-router",
         {
-          "origin": "https://replit.com/"
+          "origin": "https://maestroscan.app/"
         }
       ],
       "expo-font",
       "expo-web-browser",
       "expo-camera",
       ["react-native-vision-camera", {
-        "cameraPermissionText": "GradeSnap needs camera access to scan answer sheets."
+        "cameraPermissionText": "MaestroScan needs camera access to scan answer sheets."
       }]
     ],
     "experiments": {
@@ -58,7 +59,7 @@
     },
     "extra": {
       "router": {
-        "origin": "https://replit.com/"
+        "origin": "https://maestroscan.app/"
       },
       "eas": {
         "projectId": "8c2587a0-cc5c-4976-b9ec-0e73dc6f6256"
