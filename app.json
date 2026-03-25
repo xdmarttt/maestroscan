@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "MaestroScan",
-    "slug": "maestroscan",
+    "slug": "my-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -27,7 +27,8 @@
       "versionCode": 1,
       "permissions": [
         "CAMERA",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#0A1628",
@@ -49,9 +50,12 @@
       "expo-font",
       "expo-web-browser",
       "expo-camera",
-      ["react-native-vision-camera", {
-        "cameraPermissionText": "MaestroScan needs camera access to scan answer sheets."
-      }]
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "MaestroScan needs camera access to scan answer sheets."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

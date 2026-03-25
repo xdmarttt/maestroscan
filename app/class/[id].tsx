@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
-  ScrollView,
   Pressable,
   FlatList,
   ActivityIndicator,
@@ -24,6 +24,7 @@ export default function ClassDetailScreen() {
   const [quizzes, setQuizzes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"students" | "quizzes">("quizzes");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (!id) return;
@@ -38,6 +39,32 @@ export default function ClassDetailScreen() {
       setLoading(false);
     });
   }, [id]);
+
+  // Reset search when switching tabs
+  const handleTabChange = (newTab: "students" | "quizzes") => {
+    setTab(newTab);
+    setSearch("");
+  };
+
+  const filteredStudents = useMemo(() => {
+    if (!search.trim()) return students;
+    const q = search.toLowerCase();
+    return students.filter(
+      (s: any) =>
+        (s.full_name ?? "").toLowerCase().includes(q) ||
+        (s.lrn ?? "").toLowerCase().includes(q)
+    );
+  }, [students, search]);
+
+  const filteredQuizzes = useMemo(() => {
+    if (!search.trim()) return quizzes;
+    const q = search.toLowerCase();
+    return quizzes.filter(
+      (quiz: any) =>
+        (quiz.title ?? "").toLowerCase().includes(q) ||
+        (quiz.category ?? "").toLowerCase().includes(q)
+    );
+  }, [quizzes, search]);
 
   if (loading) {
     return (
@@ -76,7 +103,7 @@ export default function ClassDetailScreen() {
 
       <View style={styles.tabRow}>
         <Pressable
-          onPress={() => setTab("quizzes")}
+          onPress={() => handleTabChange("quizzes")}
           style={[
             styles.tabBtn,
             { backgroundColor: colors.surface, borderColor: colors.border },
@@ -94,7 +121,7 @@ export default function ClassDetailScreen() {
           </Text>
         </Pressable>
         <Pressable
-          onPress={() => setTab("students")}
+          onPress={() => handleTabChange("students")}
           style={[
             styles.tabBtn,
             { backgroundColor: colors.surface, borderColor: colors.border },
@@ -113,14 +140,36 @@ export default function ClassDetailScreen() {
         </Pressable>
       </View>
 
+      {/* Search */}
+      <View style={styles.searchRow}>
+        <View style={[styles.searchBox, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
+          <Ionicons name="search" size={16} color={colors.textMuted} />
+          <TextInput
+            style={[styles.searchInput, { color: colors.textPrimary }]}
+            placeholder={tab === "quizzes" ? "Search quizzes..." : "Search students..."}
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+            autoCorrect={false}
+          />
+          {search.length > 0 && (
+            <Pressable onPress={() => setSearch("")}>
+              <Ionicons name="close-circle" size={16} color={colors.textMuted} />
+            </Pressable>
+          )}
+        </View>
+      </View>
+
       {tab === "quizzes" ? (
         <FlatList
-          data={quizzes}
+          data={filteredQuizzes}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             <View style={styles.emptyCenter}>
-              <Text style={[styles.emptyText, { color: colors.textMuted }]}>No quizzes for this class</Text>
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+                {quizzes.length === 0 ? "No quizzes for this class" : "No matching quizzes"}
+              </Text>
             </View>
           }
           renderItem={({ item, index }) => (
@@ -146,12 +195,14 @@ export default function ClassDetailScreen() {
         />
       ) : (
         <FlatList
-          data={students}
+          data={filteredStudents}
           keyExtractor={(item: any) => item.id}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             <View style={styles.emptyCenter}>
-              <Text style={[styles.emptyText, { color: colors.textMuted }]}>No students enrolled</Text>
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>
+                {students.length === 0 ? "No students enrolled" : "No matching students"}
+              </Text>
             </View>
           }
           renderItem={({ item, index }: { item: any; index: number }) => (
@@ -234,6 +285,25 @@ const styles = StyleSheet.create({
   tabText: {
     fontSize: 13,
     fontFamily: "Inter_500Medium",
+  },
+  searchRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+  },
+  searchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    height: 38,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    padding: 0,
   },
   list: {
     padding: 20,

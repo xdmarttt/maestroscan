@@ -15,6 +15,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { ThemeProvider } from "@/lib/theme-context";
+import { ScanLimitProvider } from "@/lib/scan-limit-context";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -74,7 +75,9 @@ export default function RootLayout() {
           <KeyboardProvider>
             <ThemeProvider>
               <AuthProvider>
-                <AuthGate />
+                <ScanLimitProvider>
+                  <AuthGate />
+                </ScanLimitProvider>
               </AuthProvider>
             </ThemeProvider>
           </KeyboardProvider>

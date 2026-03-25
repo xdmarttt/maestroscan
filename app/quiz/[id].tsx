@@ -1,10 +1,11 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
   StyleSheet,
   Pressable,
   FlatList,
+  ScrollView,
   TextInput,
   ActivityIndicator,
 } from "react-native";
@@ -23,7 +24,7 @@ export default function QuizDetailScreen() {
   const [quiz, setQuiz] = useState<any>(null);
   const [sheets, setSheets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"key" | "sheets">("sheets");
+  const [tab, setTab] = useState<"key" | "sheets" | "analysis">("sheets");
   const [search, setSearch] = useState("");
 
   const load = async () => {
@@ -90,6 +91,52 @@ export default function QuizDetailScreen() {
   const filteredSheets = search.trim()
     ? sheets.filter((s) => s.studentName.toLowerCase().includes(search.toLowerCase()))
     : sheets;
+
+  // Item analysis computation
+  const itemAnalysis = useMemo(() => {
+    if (!hasAnswerKey || sheets.length === 0) return null;
+
+    const entries = Object.entries(answerKey).sort(([a], [b]) => Number(a) - Number(b));
+    const totalRespondents = sheets.length;
+
+    const items = entries.map(([num, correctAnswer]) => {
+      let correct = 0;
+      const choiceCounts: Record<string, number> = {};
+
+      for (const sheet of sheets) {
+        const studentAnswer = sheet.answers?.[num] ?? null;
+        if (studentAnswer) {
+          choiceCounts[studentAnswer] = (choiceCounts[studentAnswer] ?? 0) + 1;
+        }
+        if (studentAnswer && studentAnswer === correctAnswer) {
+          correct++;
+        }
+      }
+
+      const correctRate = totalRespondents > 0 ? correct / totalRespondents : 0;
+      let difficulty: { label: string; color: string };
+      if (correctRate >= 0.76) difficulty = { label: "Easy", color: colors.success };
+      else if (correctRate >= 0.25) difficulty = { label: "Moderate", color: colors.warning };
+      else difficulty = { label: "Difficult", color: colors.error };
+
+      return {
+        itemNumber: num,
+        correctAnswer,
+        correct,
+        incorrect: totalRespondents - correct,
+        correctRate,
+        difficulty,
+        choiceCounts,
+      };
+    });
+
+    const avgRate = items.length > 0 ? items.reduce((s, i) => s + i.correctRate, 0) / items.length : 0;
+    const easyCount = items.filter((i) => i.correctRate >= 0.76).length;
+    const moderateCount = items.filter((i) => i.correctRate >= 0.25 && i.correctRate < 0.76).length;
+    const difficultCount = items.filter((i) => i.correctRate < 0.25).length;
+
+    return { items, totalRespondents, avgRate, easyCount, moderateCount, difficultCount };
+  }, [sheets, answerKey, hasAnswerKey, colors]);
 
   const renderSheetItem = ({ item: sheet, index }: { item: any; index: number }) => (
     <Animated.View entering={FadeInDown.duration(300).delay(index * 40)}>
@@ -208,10 +255,115 @@ export default function QuizDetailScreen() {
             Answer Key
           </Text>
         </Pressable>
+        <Pressable
+          onPress={() => setTab("analysis")}
+          style={[
+            styles.tabBtn,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+            tab === "analysis" && { backgroundColor: colors.accentDim, borderColor: colors.accent },
+          ]}
+        >
+          <Text style={[
+            styles.tabText,
+            { color: colors.textMuted },
+            tab === "analysis" && { color: colors.accent },
+          ]}>
+            Item Analysis
+          </Text>
+        </Pressable>
       </View>
 
       {/* Tab content */}
-      {tab === "key" ? (
+      {tab === "analysis" ? (
+        !itemAnalysis ? (
+          <View style={styles.emptySheets}>
+            <Ionicons name="bar-chart-outline" size={32} color={colors.textMuted} />
+            <Text style={[styles.emptyText, { color: colors.textMuted }]}>No data for analysis</Text>
+            <Text style={[styles.emptySubtext, { color: colors.textMuted }]}>
+              Scan answer sheets and set an answer key first
+            </Text>
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={styles.analysisList}>
+            {/* Summary cards */}
+            <View style={styles.analysisSummaryRow}>
+              <View style={[styles.analysisSummaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Text style={[styles.analysisSummaryValue, { color: colors.textPrimary }]}>
+                  {(itemAnalysis.avgRate * 100).toFixed(0)}%
+                </Text>
+                <Text style={[styles.analysisSummaryLabel, { color: colors.textMuted }]}>Avg Rate</Text>
+              </View>
+              <View style={[styles.analysisSummaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Text style={[styles.analysisSummaryValue, { color: colors.success }]}>
+                  {itemAnalysis.easyCount}
+                </Text>
+                <Text style={[styles.analysisSummaryLabel, { color: colors.textMuted }]}>Easy</Text>
+              </View>
+              <View style={[styles.analysisSummaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Text style={[styles.analysisSummaryValue, { color: colors.warning }]}>
+                  {itemAnalysis.moderateCount}
+                </Text>
+                <Text style={[styles.analysisSummaryLabel, { color: colors.textMuted }]}>Moderate</Text>
+              </View>
+              <View style={[styles.analysisSummaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Text style={[styles.analysisSummaryValue, { color: colors.error }]}>
+                  {itemAnalysis.difficultCount}
+                </Text>
+                <Text style={[styles.analysisSummaryLabel, { color: colors.textMuted }]}>Difficult</Text>
+              </View>
+            </View>
+
+            <Text style={[styles.analysisRespondents, { color: colors.textMuted }]}>
+              {itemAnalysis.totalRespondents} respondent{itemAnalysis.totalRespondents !== 1 ? "s" : ""}
+            </Text>
+
+            {/* Item rows */}
+            {itemAnalysis.items.map((item) => (
+              <View
+                key={item.itemNumber}
+                style={[styles.analysisItem, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              >
+                <View style={styles.analysisItemHeader}>
+                  <View style={styles.analysisItemLeft}>
+                    <Text style={[styles.analysisItemNum, { color: colors.textMuted }]}>#{item.itemNumber}</Text>
+                    <View style={[styles.analysisKeyBubble, { backgroundColor: colors.accentDim, borderColor: colors.accent }]}>
+                      <Text style={[styles.analysisKeyLetter, { color: colors.accent }]}>{item.correctAnswer}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.analysisItemRight}>
+                    <Text style={[styles.analysisItemRate, { color: item.difficulty.color }]}>
+                      {(item.correctRate * 100).toFixed(0)}%
+                    </Text>
+                    <Text style={[styles.analysisDiffLabel, { color: item.difficulty.color }]}>
+                      {item.difficulty.label}
+                    </Text>
+                  </View>
+                </View>
+                {/* Bar */}
+                <View style={[styles.analysisBar, { backgroundColor: colors.surfaceElevated }]}>
+                  <View
+                    style={[
+                      styles.analysisBarFill,
+                      {
+                        backgroundColor: item.difficulty.color,
+                        width: `${Math.max(item.correctRate * 100, 2)}%` as any,
+                      },
+                    ]}
+                  />
+                </View>
+                <View style={styles.analysisItemFooter}>
+                  <Text style={[styles.analysisItemFooterText, { color: colors.success }]}>
+                    {item.correct} correct
+                  </Text>
+                  <Text style={[styles.analysisItemFooterText, { color: colors.error }]}>
+                    {item.incorrect} incorrect
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        )
+      ) : tab === "key" ? (
         <FlatList
           key="answer-key-grid"
           data={hasAnswerKey ? Object.entries(answerKey).sort(([a], [b]) => Number(a) - Number(b)) : []}
@@ -486,6 +638,101 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
   },
   sheetPercent: {
+    fontSize: 11,
+    fontFamily: "Inter_500Medium",
+  },
+  // Item Analysis styles
+  analysisList: {
+    padding: 20,
+    paddingTop: 12,
+    gap: 10,
+    paddingBottom: 40,
+  },
+  analysisSummaryRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  analysisSummaryCard: {
+    flex: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    alignItems: "center",
+    gap: 2,
+  },
+  analysisSummaryValue: {
+    fontSize: 20,
+    fontFamily: "Inter_700Bold",
+  },
+  analysisSummaryLabel: {
+    fontSize: 10,
+    fontFamily: "Inter_500Medium",
+  },
+  analysisRespondents: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    textAlign: "center",
+    paddingVertical: 4,
+  },
+  analysisItem: {
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    gap: 8,
+  },
+  analysisItemHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  analysisItemLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  analysisItemNum: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    width: 28,
+  },
+  analysisKeyBubble: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  analysisKeyLetter: {
+    fontSize: 12,
+    fontFamily: "Inter_700Bold",
+  },
+  analysisItemRight: {
+    alignItems: "flex-end",
+    gap: 1,
+  },
+  analysisItemRate: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+  },
+  analysisDiffLabel: {
+    fontSize: 10,
+    fontFamily: "Inter_600SemiBold",
+  },
+  analysisBar: {
+    height: 6,
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  analysisBarFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  analysisItemFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  analysisItemFooterText: {
     fontSize: 11,
     fontFamily: "Inter_500Medium",
   },

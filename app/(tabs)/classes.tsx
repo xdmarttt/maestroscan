@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   FlatList,
   Pressable,
@@ -27,12 +28,16 @@ interface ClassItem {
   createdAt: string | null;
 }
 
+type SortBy = "newest" | "subject" | "students";
+
 export default function ClassesTab() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<SortBy>("newest");
 
   const load = async () => {
     const data = await getClasses();
@@ -51,6 +56,41 @@ export default function ClassesTab() {
     await load();
     setRefreshing(false);
   };
+
+  const filtered = useMemo(() => {
+    let list = classes;
+
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.subject.toLowerCase().includes(q) ||
+          (c.section ?? "").toLowerCase().includes(q) ||
+          (c.gradeLevel ?? "").toLowerCase().includes(q)
+      );
+    }
+
+    const sorted = [...list];
+    sorted.sort((a, b) => {
+      switch (sortBy) {
+        case "newest":
+          return (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
+        case "subject":
+          return a.subject.localeCompare(b.subject);
+        case "students":
+          return b.studentCount - a.studentCount;
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [classes, search, sortBy]);
+
+  const sortOptions: { key: SortBy; label: string }[] = [
+    { key: "newest", label: "Newest" },
+    { key: "subject", label: "Subject" },
+    { key: "students", label: "Students" },
+  ];
 
   const renderClass = ({ item, index }: { item: ClassItem; index: number }) => (
     <Animated.View entering={FadeInDown.duration(400).delay(index * 60)}>
@@ -103,27 +143,77 @@ export default function ClassesTab() {
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>Classes</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-          {classes.length} active classes
+          {filtered.length} of {classes.length} classes
         </Text>
+      </View>
+
+      {/* Search */}
+      <View style={styles.searchRow}>
+        <View style={[styles.searchBox, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
+          <Ionicons name="search" size={16} color={colors.textMuted} />
+          <TextInput
+            style={[styles.searchInput, { color: colors.textPrimary }]}
+            placeholder="Search by subject, section..."
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+            autoCorrect={false}
+          />
+          {search.length > 0 && (
+            <Pressable onPress={() => setSearch("")}>
+              <Ionicons name="close-circle" size={16} color={colors.textMuted} />
+            </Pressable>
+          )}
+        </View>
+      </View>
+
+      {/* Sort */}
+      <View style={styles.filterRow}>
+        <Text style={[styles.filterLabel, { color: colors.textMuted }]}>Sort:</Text>
+        {sortOptions.map((opt) => (
+          <Pressable
+            key={opt.key}
+            onPress={() => setSortBy(opt.key)}
+            style={[
+              styles.filterChip,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+              sortBy === opt.key && { backgroundColor: colors.accentDim, borderColor: colors.accent },
+            ]}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                { color: colors.textMuted },
+                sortBy === opt.key && { color: colors.accent },
+              ]}
+            >
+              {opt.label}
+            </Text>
+          </Pressable>
+        ))}
       </View>
 
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.accent} size="large" />
         </View>
-      ) : classes.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <View style={styles.center}>
           <View style={[styles.emptyIcon, { backgroundColor: colors.accentDim }]}>
             <Ionicons name="book-outline" size={32} color={colors.accent} />
           </View>
-          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No classes yet</Text>
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+            {classes.length === 0 ? "No classes yet" : "No matching classes"}
+          </Text>
           <Text style={[styles.emptySubtext, { color: colors.textMuted }]}>
-            Create classes from the web dashboard
+            {classes.length === 0
+              ? "Create classes from the web dashboard"
+              : "Try adjusting your search"}
           </Text>
         </View>
       ) : (
         <FlatList
-          data={classes}
+          data={filtered}
           keyExtractor={(item) => item.id}
           renderItem={renderClass}
           contentContainerStyle={styles.list}
@@ -143,7 +233,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 12,
+    paddingBottom: 8,
   },
   title: {
     fontSize: 26,
@@ -154,6 +244,46 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Inter_400Regular",
     marginTop: 4,
+  },
+  searchRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+  },
+  searchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    height: 40,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    padding: 0,
+  },
+  filterRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  filterLabel: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+  },
+  filterChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
   },
   center: {
     flex: 1,

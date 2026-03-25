@@ -14,6 +14,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme, useColors } from "@/lib/theme-context";
 import { getDashboardStats } from "@/lib/queries";
+import { useScanLimit } from "@/lib/scan-limit-context";
 
 import MaestroLogo from "@/components/MaestroLogo";
 
@@ -37,6 +38,7 @@ export default function HomeTab() {
   const colors = useColors();
   const [stats, setStats] = useState<Stats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const { used, limit, refresh: refreshLimit } = useScanLimit();
 
   const loadStats = async () => {
     const data = await getDashboardStats();
@@ -45,11 +47,12 @@ export default function HomeTab() {
 
   useEffect(() => {
     loadStats();
+    refreshLimit();
   }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadStats();
+    await Promise.all([loadStats(), refreshLimit()]);
     setRefreshing(false);
   };
 
@@ -171,6 +174,43 @@ export default function HomeTab() {
           </Animated.View>
         ))}
       </View>
+
+      {/* Scan Limit (free tier only) */}
+      {limit !== null && (
+        <Animated.View entering={FadeInDown.duration(400).delay(550)}>
+          <View
+            style={[
+              styles.scanLimitCard,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
+            <View style={styles.scanLimitHeader}>
+              <View style={[styles.statIcon, { backgroundColor: colors.accentDim }]}>
+                <Ionicons name="scan-outline" size={20} color={colors.accent} />
+              </View>
+              <View style={styles.statTextCol}>
+                <Text style={[styles.scanLimitValue, { color: colors.textPrimary }]}>
+                  {Math.max(0, limit - used)} scans left
+                </Text>
+                <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
+                  {used} of {limit} used this month
+                </Text>
+              </View>
+            </View>
+            <View style={[styles.scanLimitBar, { backgroundColor: colors.border }]}>
+              <View
+                style={[
+                  styles.scanLimitFill,
+                  {
+                    backgroundColor: used / limit > 0.9 ? colors.error : colors.accent,
+                    width: `${Math.min(100, (used / limit) * 100)}%`,
+                  },
+                ]}
+              />
+            </View>
+          </View>
+        </Animated.View>
+      )}
 
       {/* Tip */}
       <Animated.View entering={FadeInDown.duration(400).delay(650)}>
@@ -322,5 +362,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Inter_400Regular",
     lineHeight: 18,
+  },
+
+  // Scan limit
+  scanLimitCard: {
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    gap: 12,
+  },
+  scanLimitHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  scanLimitValue: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: -0.3,
+  },
+  scanLimitBar: {
+    height: 6,
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  scanLimitFill: {
+    height: "100%",
+    borderRadius: 3,
   },
 });

@@ -32,6 +32,7 @@ import { CameraScanner, useCameraPermissions } from "@/components/CameraScanner"
 import { loadQuiz, loadRoster, QuizQuestion } from "@/lib/quiz-storage";
 import { detectAndScan, warmupOpenCV } from "@/lib/scan-offline";
 import { useAuth } from "@/lib/auth-context";
+import { useScanLimit } from "@/lib/scan-limit-context";
 import {
   getStudentsByClass,
   getAnswerSheetByQuizAndStudent,
@@ -99,6 +100,7 @@ export default function ScannerScreen() {
 
   const { profile } = useAuth();
   const colors = useColors();
+  const { canScan, used, limit, isLoading: limitLoading, refresh: refreshLimit, increment: incrementScanCount } = useScanLimit();
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const classStudentsRef = useRef<any[]>([]);
@@ -341,6 +343,7 @@ export default function ScannerScreen() {
               });
               if (!saveErr) {
                 setScanResult(prev => prev ? { ...prev, saved: true, saveStatus: "saved" } : prev);
+                incrementScanCount();
               }
             }
           }
@@ -390,6 +393,9 @@ export default function ScannerScreen() {
       };
     }, [])
   );
+
+  // Refresh scan limit once when screen is focused
+  useFocusEffect(useCallback(() => { refreshLimit(); }, [refreshLimit]));
 
   const scanLineY = useSharedValue(0);
 
@@ -509,8 +515,9 @@ export default function ScannerScreen() {
     if (!error) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setScanResult(prev => prev ? { ...prev, saved: true, saveStatus: "saved" } : prev);
+      incrementScanCount();
     }
-  }, [scanResult, params.quizId, profile]);
+  }, [scanResult, params.quizId, profile, incrementScanCount]);
 
   const getScoreColor = (pct: number) => {
     if (pct >= 80) return colors.success;
@@ -522,6 +529,28 @@ export default function ScannerScreen() {
   const bottomPad = Platform.OS === "web" ? 34 : insets.bottom;
 
   const headerTitle = params.quizTitle ?? "MaestroScan";
+
+  if (!canScan && !limitLoading) {
+    return (
+      <View style={[styles.container, { paddingTop: topPad, backgroundColor: colors.background }]}>
+        <Animated.View entering={FadeIn.duration(500)} style={styles.permissionContainer}>
+          <View style={[styles.permissionIconWrap, { backgroundColor: colors.warningDim ?? "#FFF3E0", borderColor: colors.warning ?? "#FF9800" }]}>
+            <Ionicons name="lock-closed-outline" size={52} color={colors.warning ?? "#FF9800"} />
+          </View>
+          <Text style={[styles.permissionTitle, { color: colors.textPrimary }]}>Monthly Scan Limit Reached</Text>
+          <Text style={[styles.permissionBody, { color: colors.textSecondary }]}>
+            You've used {used} of {limit} free scans this month. Upgrade your plan for unlimited scanning.
+          </Text>
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [styles.permissionBtn, { backgroundColor: colors.accent }, pressed && { opacity: 0.8 }]}
+          >
+            <Text style={[styles.permissionBtnText, { color: "#FFFFFF" }]}>Go Back</Text>
+          </Pressable>
+        </Animated.View>
+      </View>
+    );
+  }
 
   if (!permission) {
     return (
@@ -575,6 +604,12 @@ export default function ScannerScreen() {
             <Text style={styles.appName} numberOfLines={1}>{headerTitle}</Text>
           </View>
           <View style={styles.headerActions}>
+            {limit !== null && (
+              <View style={styles.scanLimitBadge}>
+                <Ionicons name="scan-outline" size={13} color={Colors.textSecondary} />
+                <Text style={styles.scanLimitText}>{Math.max(0, limit - used)}/{limit}</Text>
+              </View>
+            )}
             {!params.quizId && (
               <>
                 <Pressable
@@ -842,6 +877,20 @@ const styles = StyleSheet.create({
   iconBtn: {
     padding: 8,
     borderRadius: 20,
+  },
+  scanLimitBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  scanLimitText: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.textSecondary,
   },
   headerSub: {
     fontSize: 13,

@@ -1,7 +1,8 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   FlatList,
   Pressable,
@@ -27,12 +28,20 @@ interface QuizItem {
   classes: { subject: string; grade_level: string | null; section: string | null } | null;
 }
 
+type CategoryFilter = "all" | "WW" | "PT" | "QA";
+type StatusFilter = "all" | "published" | "draft" | "done";
+type SortBy = "newest" | "title" | "points";
+
 export default function QuizzesTab() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const [quizzes, setQuizzes] = useState<QuizItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [sortBy, setSortBy] = useState<SortBy>("newest");
 
   const categoryColors: Record<string, string> = {
     WW: colors.accent,
@@ -57,6 +66,44 @@ export default function QuizzesTab() {
     await load();
     setRefreshing(false);
   };
+
+  const filtered = useMemo(() => {
+    let list = quizzes;
+
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (quiz) =>
+          quiz.title.toLowerCase().includes(q) ||
+          (quiz.classes?.subject ?? "").toLowerCase().includes(q)
+      );
+    }
+
+    if (categoryFilter !== "all") {
+      list = list.filter((quiz) => quiz.category === categoryFilter);
+    }
+
+    if (statusFilter !== "all") {
+      list = list.filter((quiz) => (quiz.status ?? "draft") === statusFilter);
+    }
+
+    const sorted = [...list];
+    sorted.sort((a, b) => {
+      switch (sortBy) {
+        case "newest":
+          return (b.created_at ?? "").localeCompare(a.created_at ?? "");
+        case "title":
+          return a.title.localeCompare(b.title);
+        case "points":
+          return b.total_points - a.total_points;
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [quizzes, search, categoryFilter, statusFilter, sortBy]);
+
+  // category filter removed per user request
 
   const renderQuiz = ({ item, index }: { item: QuizItem; index: number }) => {
     const cls = item.classes;
@@ -126,27 +173,81 @@ export default function QuizzesTab() {
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>Quizzes</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-          {quizzes.length} total quizzes
+          {filtered.length} of {quizzes.length} quizzes
         </Text>
+      </View>
+
+      {/* Search */}
+      <View style={styles.searchRow}>
+        <View style={[styles.searchBox, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
+          <Ionicons name="search" size={16} color={colors.textMuted} />
+          <TextInput
+            style={[styles.searchInput, { color: colors.textPrimary }]}
+            placeholder="Search by title or subject..."
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+            autoCorrect={false}
+          />
+          {search.length > 0 && (
+            <Pressable onPress={() => setSearch("")}>
+              <Ionicons name="close-circle" size={16} color={colors.textMuted} />
+            </Pressable>
+          )}
+        </View>
+      </View>
+
+      {/* Status Filter */}
+      <View style={styles.filterRow}>
+        {([
+          { key: "all", label: "All" },
+          { key: "published", label: "Published" },
+          { key: "draft", label: "Draft" },
+          { key: "done", label: "Done" },
+        ] as { key: StatusFilter; label: string }[]).map((opt) => (
+          <Pressable
+            key={opt.key}
+            onPress={() => setStatusFilter(opt.key)}
+            style={[
+              styles.filterChip,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+              statusFilter === opt.key && { backgroundColor: colors.accentDim, borderColor: colors.accent },
+            ]}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                { color: colors.textMuted },
+                statusFilter === opt.key && { color: colors.accent },
+              ]}
+            >
+              {opt.label}
+            </Text>
+          </Pressable>
+        ))}
       </View>
 
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.accent} size="large" />
         </View>
-      ) : quizzes.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <View style={styles.center}>
           <View style={[styles.emptyIcon, { backgroundColor: colors.warningDim }]}>
             <Ionicons name="document-text-outline" size={32} color={colors.warning} />
           </View>
-          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No quizzes yet</Text>
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+            {quizzes.length === 0 ? "No quizzes yet" : "No matching quizzes"}
+          </Text>
           <Text style={[styles.emptySubtext, { color: colors.textMuted }]}>
-            Create quizzes from the web dashboard
+            {quizzes.length === 0
+              ? "Create quizzes from the web dashboard"
+              : "Try adjusting your search or filters"}
           </Text>
         </View>
       ) : (
         <FlatList
-          data={quizzes}
+          data={filtered}
           keyExtractor={(item) => item.id}
           renderItem={renderQuiz}
           contentContainerStyle={styles.list}
@@ -166,7 +267,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 12,
+    paddingBottom: 8,
   },
   title: {
     fontSize: 26,
@@ -177,6 +278,45 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Inter_400Regular",
     marginTop: 4,
+  },
+  searchRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+  },
+  searchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    height: 40,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    padding: 0,
+  },
+  filterRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    flexDirection: "row",
+    gap: 8,
+  },
+  filterGroup: {
+    flexDirection: "row",
+    gap: 6,
+  },
+  filterChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
   },
   center: {
     flex: 1,

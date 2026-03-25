@@ -1,9 +1,11 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
   Text,
+  TextInput,
   StyleSheet,
   FlatList,
+  Pressable,
   RefreshControl,
   ActivityIndicator,
 } from "react-native";
@@ -24,12 +26,18 @@ interface StudentItem {
   access_code: string;
 }
 
+type StatusFilter = "all" | "active" | "inactive";
+type SortBy = "name" | "lrn" | "grade";
+
 export default function StudentsTab() {
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const [students, setStudents] = useState<StudentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [sortBy, setSortBy] = useState<SortBy>("name");
 
   const load = async () => {
     const data = await getAllStudents();
@@ -48,6 +56,50 @@ export default function StudentsTab() {
     await load();
     setRefreshing(false);
   };
+
+  const filtered = useMemo(() => {
+    let list = students;
+
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (s) =>
+          s.full_name.toLowerCase().includes(q) ||
+          s.lrn.toLowerCase().includes(q)
+      );
+    }
+
+    if (statusFilter !== "all") {
+      list = list.filter((s) => (s.status ?? "active") === statusFilter);
+    }
+
+    const sorted = [...list];
+    sorted.sort((a, b) => {
+      switch (sortBy) {
+        case "name":
+          return a.full_name.localeCompare(b.full_name);
+        case "lrn":
+          return a.lrn.localeCompare(b.lrn);
+        case "grade":
+          return (a.grade_level ?? "").localeCompare(b.grade_level ?? "");
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [students, search, statusFilter, sortBy]);
+
+  const statusOptions: { key: StatusFilter; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "active", label: "Active" },
+    { key: "inactive", label: "Inactive" },
+  ];
+
+  const sortOptions: { key: SortBy; label: string }[] = [
+    { key: "name", label: "Name" },
+    { key: "lrn", label: "LRN" },
+    { key: "grade", label: "Grade" },
+  ];
 
   const renderStudent = ({ item, index }: { item: StudentItem; index: number }) => (
     <Animated.View entering={FadeInDown.duration(300).delay(index * 30)}>
@@ -107,27 +159,101 @@ export default function StudentsTab() {
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.textPrimary }]}>Students</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-          {students.length} total students
+          {filtered.length} of {students.length} students
         </Text>
+      </View>
+
+      {/* Search */}
+      <View style={styles.searchRow}>
+        <View style={[styles.searchBox, { backgroundColor: colors.inputBackground, borderColor: colors.border }]}>
+          <Ionicons name="search" size={16} color={colors.textMuted} />
+          <TextInput
+            style={[styles.searchInput, { color: colors.textPrimary }]}
+            placeholder="Search by name or LRN..."
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+            autoCorrect={false}
+          />
+          {search.length > 0 && (
+            <Pressable onPress={() => setSearch("")}>
+              <Ionicons name="close-circle" size={16} color={colors.textMuted} />
+            </Pressable>
+          )}
+        </View>
+      </View>
+
+      {/* Filters */}
+      <View style={styles.filterRow}>
+        <View style={styles.filterGroup}>
+          {statusOptions.map((opt) => (
+            <Pressable
+              key={opt.key}
+              onPress={() => setStatusFilter(opt.key)}
+              style={[
+                styles.filterChip,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+                statusFilter === opt.key && { backgroundColor: colors.accentDim, borderColor: colors.accent },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.filterChipText,
+                  { color: colors.textMuted },
+                  statusFilter === opt.key && { color: colors.accent },
+                ]}
+              >
+                {opt.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        <View style={styles.filterGroup}>
+          {sortOptions.map((opt) => (
+            <Pressable
+              key={opt.key}
+              onPress={() => setSortBy(opt.key)}
+              style={[
+                styles.filterChip,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+                sortBy === opt.key && { backgroundColor: colors.accentDim, borderColor: colors.accent },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.filterChipText,
+                  { color: colors.textMuted },
+                  sortBy === opt.key && { color: colors.accent },
+                ]}
+              >
+                {opt.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
       </View>
 
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.accent} size="large" />
         </View>
-      ) : students.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <View style={styles.center}>
           <View style={[styles.emptyIcon, { backgroundColor: colors.successDim }]}>
             <Ionicons name="people-outline" size={32} color={colors.success} />
           </View>
-          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No students yet</Text>
+          <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+            {students.length === 0 ? "No students yet" : "No matching students"}
+          </Text>
           <Text style={[styles.emptySubtext, { color: colors.textMuted }]}>
-            Add students from the web dashboard
+            {students.length === 0
+              ? "Add students from the web dashboard"
+              : "Try adjusting your search or filters"}
           </Text>
         </View>
       ) : (
         <FlatList
-          data={students}
+          data={filtered}
           keyExtractor={(item) => item.id}
           renderItem={renderStudent}
           contentContainerStyle={styles.list}
@@ -147,7 +273,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 12,
+    paddingBottom: 8,
   },
   title: {
     fontSize: 26,
@@ -158,6 +284,46 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Inter_400Regular",
     marginTop: 4,
+  },
+  searchRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+  },
+  searchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    height: 40,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    padding: 0,
+  },
+  filterRow: {
+    paddingHorizontal: 20,
+    paddingBottom: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  filterGroup: {
+    flexDirection: "row",
+    gap: 6,
+  },
+  filterChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
   },
   center: {
     flex: 1,
