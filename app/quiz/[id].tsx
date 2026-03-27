@@ -41,58 +41,10 @@ export default function QuizDetailScreen() {
     }, [id])
   );
 
-  const handleScan = () => {
-    if (!quiz) return;
-
-    const answerKey = quiz.answer_key as Record<string, string> | null;
-    const format = quiz.answer_sheet_format ?? 20;
-    const choiceCount = format <= 20 ? 4 : 5;
-
-    router.push({
-      pathname: "/scan",
-      params: {
-        quizId: quiz.id,
-        classId: quiz.class_id,
-        answerKey: answerKey ? JSON.stringify(answerKey) : "",
-        totalPoints: String(quiz.total_points),
-        choiceCount: String(choiceCount),
-        quizTitle: quiz.title,
-      },
-    });
-  };
-
-  if (loading) {
-    return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
-        <ActivityIndicator color={colors.accent} size="large" />
-      </View>
-    );
-  }
-
-  if (!quiz) {
-    return (
-      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
-        <Text style={[styles.emptyText, { color: colors.textMuted }]}>Quiz not found</Text>
-      </View>
-    );
-  }
-
-  const cls = quiz.classes as { subject: string; grade_level: string | null; section: string | null } | null;
-  const className = cls
-    ? `${cls.subject}${cls.grade_level ? ` ${cls.grade_level}` : ""}${cls.section ? ` · ${cls.section}` : ""}`
-    : "";
-
-  const categoryColors: Record<string, string> = { WW: colors.accent, PT: colors.warning, QA: colors.success };
-  const catColor = categoryColors[quiz.category] ?? colors.textMuted;
-
-  const answerKey = (quiz.answer_key ?? {}) as Record<string, string>;
+  const answerKey = (quiz?.answer_key ?? {}) as Record<string, string>;
   const hasAnswerKey = Object.keys(answerKey).length > 0;
 
-  const filteredSheets = search.trim()
-    ? sheets.filter((s) => s.studentName.toLowerCase().includes(search.toLowerCase()))
-    : sheets;
-
-  // Item analysis computation
+  // Item analysis computation — must be before any early returns
   const itemAnalysis = useMemo(() => {
     if (!hasAnswerKey || sheets.length === 0) return null;
 
@@ -137,6 +89,54 @@ export default function QuizDetailScreen() {
 
     return { items, totalRespondents, avgRate, easyCount, moderateCount, difficultCount };
   }, [sheets, answerKey, hasAnswerKey, colors]);
+
+  const handleScan = () => {
+    if (!quiz) return;
+
+    const answerKeyParam = quiz.answer_key as Record<string, string> | null;
+    const format = quiz.answer_sheet_format ?? 20;
+    const choiceCount = format <= 20 ? 4 : 5;
+
+    router.push({
+      pathname: "/scan",
+      params: {
+        quizId: quiz.id,
+        classId: quiz.class_id,
+        answerKey: answerKeyParam ? JSON.stringify(answerKeyParam) : "",
+        totalPoints: String(quiz.total_points),
+        choiceCount: String(choiceCount),
+        quizTitle: quiz.title,
+      },
+    });
+  };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+        <ActivityIndicator color={colors.accent} size="large" />
+      </View>
+    );
+  }
+
+  if (!quiz) {
+    return (
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+        <Text style={[styles.emptyText, { color: colors.textMuted }]}>Quiz not found</Text>
+      </View>
+    );
+  }
+
+  const cls = quiz.classes as { subject: string; grade_level: string | null; section: string | null } | null;
+  const className = cls
+    ? `${cls.subject}${cls.grade_level ? ` ${cls.grade_level}` : ""}${cls.section ? ` · ${cls.section}` : ""}`
+    : "";
+
+  const categoryColors: Record<string, string> = { WW: colors.accent, PT: colors.warning, QA: colors.success };
+  const catColor = categoryColors[quiz.category] ?? colors.textMuted;
+
+  const filteredSheets = search.trim()
+    ? sheets.filter((s) => s.studentName.toLowerCase().includes(search.toLowerCase()))
+    : sheets;
 
   const renderSheetItem = ({ item: sheet, index }: { item: any; index: number }) => (
     <Animated.View entering={FadeInDown.duration(300).delay(index * 40)}>
