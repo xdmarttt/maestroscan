@@ -24,7 +24,7 @@
     },
     "android": {
       "package": "com.maestroscan.app",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": [
         "CAMERA",
         "android.permission.CAMERA",
@@ -69,6 +69,12 @@
         "projectId": "8c2587a0-cc5c-4976-b9ec-0e73dc6f6256"
       }
     },
-    "owner": "martsonic901"
+    "owner": "martsonic901",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/8c2587a0-cc5c-4976-b9ec-0e73dc6f6256"
+    }
   }
 }

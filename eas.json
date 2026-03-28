@@ -16,7 +16,11 @@
       "channel": "preview"
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://rulupqcqdnqbbfnxfysc.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ1bHVwcWNxZG5xYmJmbnhmeXNjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwNjAxODQsImV4cCI6MjA4ODYzNjE4NH0.U6QjwZQjMJKgL6kftvpQesriiQIOf32LZPNRFfXvKt4"
+      }
     }
   },
   "submit": {
