@@ -16,6 +16,7 @@ import { queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { ThemeProvider } from "@/lib/theme-context";
 import { ScanLimitProvider } from "@/lib/scan-limit-context";
+import { IAPProvider } from "@/lib/iap";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -48,6 +49,7 @@ function AuthGate() {
       <Stack.Screen name="quiz/[id]" options={{ presentation: "card" }} />
       <Stack.Screen name="answer-key" options={{ presentation: "card" }} />
       <Stack.Screen name="scan-result" options={{ presentation: "card" }} />
+      <Stack.Screen name="upgrade" options={{ presentation: "modal" }} />
     </Stack>
   );
 }
@@ -76,7 +78,9 @@ export default function RootLayout() {
             <ThemeProvider>
               <AuthProvider>
                 <ScanLimitProvider>
-                  <AuthGate />
+                  <IAPProvider>
+                    <AuthGate />
+                  </IAPProvider>
                 </ScanLimitProvider>
               </AuthProvider>
             </ThemeProvider>

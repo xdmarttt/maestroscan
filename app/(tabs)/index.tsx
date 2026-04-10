@@ -33,7 +33,7 @@ function getGreeting(): string {
 
 export default function HomeTab() {
   const insets = useSafeAreaInsets();
-  const { profile, signOut } = useAuth();
+  const { profile } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const colors = useColors();
   const [stats, setStats] = useState<Stats | null>(null);
@@ -115,16 +115,6 @@ export default function HomeTab() {
               color={isDark ? colors.warning : colors.accent}
             />
           </Pressable>
-          <Pressable
-            onPress={signOut}
-            style={({ pressed }) => [
-              styles.iconBtn,
-              { backgroundColor: colors.surface, borderColor: colors.border },
-              pressed && { opacity: 0.6 },
-            ]}
-          >
-            <Ionicons name="log-out-outline" size={18} color={colors.textSecondary} />
-          </Pressable>
         </View>
       </Animated.View>
 
@@ -146,6 +136,36 @@ export default function HomeTab() {
           <MaestroLogo size={64} />
         </View>
       </Animated.View>
+
+      {/* Upgrade Banner (free tier only) */}
+      {limit !== null && (
+        <Animated.View entering={FadeInDown.duration(400).delay(200)}>
+          <Pressable
+            onPress={() => router.push("/upgrade" as any)}
+            style={({ pressed }) => [
+              styles.upgradeBanner,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.accent,
+              },
+              pressed && { opacity: 0.9, transform: [{ scale: 0.985 }] },
+            ]}
+          >
+            <View style={[styles.upgradeBannerIcon, { backgroundColor: colors.accentDim }]}>
+              <Ionicons name="rocket-outline" size={22} color={colors.accent} />
+            </View>
+            <View style={styles.upgradeBannerText}>
+              <Text style={[styles.upgradeBannerTitle, { color: colors.textPrimary }]}>
+                Upgrade to Solo
+              </Text>
+              <Text style={[styles.upgradeBannerSub, { color: colors.textSecondary }]}>
+                Unlimited scans, AI quizzes & more — from ₱349/mo
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.accent} />
+          </Pressable>
+        </Animated.View>
+      )}
 
       {/* Stats */}
       <View style={styles.statsList}>
@@ -208,6 +228,17 @@ export default function HomeTab() {
                 ]}
               />
             </View>
+            <Pressable
+              onPress={() => router.push("/upgrade" as any)}
+              style={({ pressed }) => [
+                styles.upgradeBtn,
+                { backgroundColor: colors.accent },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons name="rocket-outline" size={14} color="#FFFFFF" />
+              <Text style={styles.upgradeBtnText}>Upgrade to Solo</Text>
+            </Pressable>
           </View>
         </Animated.View>
       )}
@@ -389,5 +420,46 @@ const styles = StyleSheet.create({
   scanLimitFill: {
     height: "100%",
     borderRadius: 3,
+  },
+  upgradeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 12,
+  },
+  upgradeBtnText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
+    color: "#FFFFFF",
+  },
+  upgradeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    gap: 12,
+  },
+  upgradeBannerIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  upgradeBannerText: {
+    flex: 1,
+  },
+  upgradeBannerTitle: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 15,
+  },
+  upgradeBannerSub: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 12,
+    marginTop: 2,
   },
 });

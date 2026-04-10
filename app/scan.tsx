@@ -542,10 +542,16 @@ export default function ScannerScreen() {
             You've used {used} of {limit} free scans this month. Upgrade your plan for unlimited scanning.
           </Text>
           <Pressable
-            onPress={() => router.back()}
+            onPress={() => router.push("/upgrade" as any)}
             style={({ pressed }) => [styles.permissionBtn, { backgroundColor: colors.accent }, pressed && { opacity: 0.8 }]}
           >
-            <Text style={[styles.permissionBtnText, { color: "#FFFFFF" }]}>Go Back</Text>
+            <Text style={[styles.permissionBtnText, { color: "#FFFFFF" }]}>Upgrade to Solo</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.back()}
+            style={({ pressed }) => [{ paddingVertical: 12, paddingHorizontal: 24, marginTop: 4 }, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={[styles.permissionBtnText, { color: colors.textMuted }]}>Go Back</Text>
           </Pressable>
         </Animated.View>
       </View>
@@ -575,7 +581,7 @@ export default function ScannerScreen() {
             onPress={requestPermission}
             style={({ pressed }) => [styles.permissionBtn, { backgroundColor: colors.accent }, pressed && { opacity: 0.8 }]}
           >
-            <Text style={[styles.permissionBtnText, { color: "#FFFFFF" }]}>Allow Camera</Text>
+            <Text style={[styles.permissionBtnText, { color: "#FFFFFF" }]}>Continue</Text>
           </Pressable>
         </Animated.View>
       </View>

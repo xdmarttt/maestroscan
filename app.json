@@ -16,7 +16,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.maestroscan.app",
-      "buildNumber": "4",
+      "buildNumber": "15",
       "infoPlist": {
         "NSCameraUsageDescription": "MaestroScan needs camera access to scan answer sheets.",
         "ITSAppUsesNonExemptEncryption": false
@@ -24,7 +24,7 @@
     },
     "android": {
       "package": "com.maestroscan.app",
-      "versionCode": 3,
+      "versionCode": 5,
       "permissions": [
         "CAMERA",
         "android.permission.CAMERA",
@@ -55,7 +55,8 @@
         {
           "cameraPermissionText": "MaestroScan needs camera access to scan answer sheets."
         }
-      ]
+      ],
+      "react-native-iap"
     ],
     "experiments": {
       "typedRoutes": true,

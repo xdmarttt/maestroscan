@@ -4,9 +4,11 @@ import {
   getScansUsedThisMonth,
   getOrganizationTier,
   getLimitsForTier,
+  type SubscriptionTier,
 } from "@/lib/entitlements";
 
 interface ScanLimitState {
+  tier: SubscriptionTier;
   used: number;
   limit: number | null; // null = unlimited
   canScan: boolean;
@@ -16,6 +18,7 @@ interface ScanLimitState {
 }
 
 const ScanLimitContext = createContext<ScanLimitState>({
+  tier: "free",
   used: 0,
   limit: null,
   canScan: true,
@@ -30,6 +33,7 @@ export function useScanLimit() {
 
 export function ScanLimitProvider({ children }: { children: React.ReactNode }) {
   const { profile } = useAuth();
+  const [tier, setTier] = useState<SubscriptionTier>("free");
   const [used, setUsed] = useState(0);
   const [limit, setLimit] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -38,11 +42,12 @@ export function ScanLimitProvider({ children }: { children: React.ReactNode }) {
     if (!profile?.organization_id) return;
     setIsLoading(true);
     try {
-      const [tier, count] = await Promise.all([
+      const [fetchedTier, count] = await Promise.all([
         getOrganizationTier(profile.organization_id),
         getScansUsedThisMonth(profile.organization_id),
       ]);
-      const limits = getLimitsForTier(tier);
+      const limits = getLimitsForTier(fetchedTier);
+      setTier(fetchedTier);
       setLimit(limits.maxScansPerMonth);
       setUsed(count);
     } catch (e) {
@@ -61,7 +66,7 @@ export function ScanLimitProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <ScanLimitContext.Provider
-      value={{ used, limit, canScan, isLoading, refresh, increment }}
+      value={{ tier, used, limit, canScan, isLoading, refresh, increment }}
     >
       {children}
     </ScanLimitContext.Provider>
